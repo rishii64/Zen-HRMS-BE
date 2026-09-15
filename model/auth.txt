@@ -1,0 +1,505 @@
+Main File where all codes are written
+
+const { pool } = require("../config/db");
+
+const AuthModel = {
+  // Find a user by email (case-insensitive)
+  async findByEmail(email) {
+    const query = "SELECT * FROM users WHERE LOWER(email) = LOWER($1)";
+    const res = await pool.query(query, [email.trim()]);
+    return res.rows[0];
+  },
+
+  // Find a user by email and role (case-insensitive)
+  async findByEmailAndRole(email, role) {
+    const query = "SELECT * FROM users WHERE LOWER(email) = LOWER($1) AND LOWER(role::text) = LOWER($2)";
+    const res = await pool.query(query, [email.trim(), role.trim()]);
+    return res.rows[0];
+  },
+
+  // Find a user by ID
+  async findById(id) {
+    const query = "SELECT * FROM users WHERE id = $1";
+    const res = await pool.query(query, [id]);
+    return res.rows[0];
+  },
+
+  // Create a new user
+  async createUser({ name, email, password, role, employeeID }) {
+    const query = `
+      INSERT INTO users (name, email, password, role, employee_id, is_active)
+      VALUES ($1, $2, $3, $4::user_role, $5, true)
+      RETURNING id, name, email, role, employee_id, is_active, created_at
+    `;
+    const res = await pool.query(query, [
+      name.trim(),
+      email.trim(),
+      password,
+      role.toLowerCase().trim(),
+      employeeID ? employeeID.trim() : null
+    ]);
+    return res.rows[0];
+  },
+
+  // Find a user by employee_id (case-insensitive)
+  async findByEmployeeID(employeeID) {
+    const query = "SELECT * FROM users WHERE LOWER(employee_id) = LOWER($1)";
+    const res = await pool.query(query, [employeeID.trim()]);
+    return res.rows[0];
+  },
+
+  // Find a user by employee_id and role (case-insensitive)
+  async findByEmployeeIDAndRole(employeeID, role) {
+    const query = "SELECT * FROM users WHERE LOWER(employee_id) = LOWER($1) AND LOWER(role::text) = LOWER($2)";
+    const res = await pool.query(query, [employeeID.trim(), role.trim()]);
+    return res.rows[0];
+  },
+
+  // Find an existing employee by employee_id or email
+  async findEmployeeByCodeOrEmail(code, email) {
+    const query = "SELECT id FROM employees WHERE employee_id = $1 OR LOWER(email) = LOWER($2)";
+    const res = await pool.query(query, [code ? code.trim() : "", email.trim()]);
+    return res.rows[0];
+  },
+
+  // Create employee profile
+  async createEmployeeProfile({ employeeCode, firstName, lastName, email }) {
+    const query = `
+      INSERT INTO employees (employee_id, first_name, last_name, email, status, job_role)
+      VALUES ($1, $2, $3, $4, 'Active', 'employee')
+      RETURNING id, employee_id, first_name, last_name, email
+    `;
+    const code = employeeCode.trim();
+    const res = await pool.query(query, [
+      code,
+      firstName.trim(),
+      lastName.trim(),
+      email.trim()
+    ]);
+    return res.rows[0];
+  },
+
+  // Get all users
+  async getAllUsers() {
+    const query = "SELECT id, name, email, role, employee_id, is_active, created_at FROM users ORDER BY id ASC";
+    const res = await pool.query(query);
+    return res.rows;
+  },
+
+  // Update password
+  async changePassword(id, passwordHash) {
+    const query = "UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2";
+    await pool.query(query, [passwordHash, id]);
+  },
+
+  // Toggle user active status
+  async toggleStatus(id, isActive) {
+    const query = "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2";
+    await pool.query(query, [isActive, id]);
+  },
+
+  // Delete user
+  async deleteUser(id) {
+    const query = "DELETE FROM users WHERE id = $1";
+    await pool.query(query, [id]);
+  },
+
+  // Store OTP
+  async storeOTP(email, otp, expiresAt) {
+    // Delete any existing OTP entries for this email first
+    await pool.query("DELETE FROM password_resets WHERE LOWER(email) = LOWER($1)", [email.trim()]);
+    // Insert new OTP
+    await pool.query(
+      "INSERT INTO password_resets (email, otp, expires_at) VALUES ($1, $2, $3)",
+      [email.trim(), otp.trim(), expiresAt]
+    );
+  },
+
+  // Get latest OTP
+  async getLatestOTP(email) {
+    const res = await pool.query(
+      "SELECT * FROM password_resets WHERE LOWER(email) = LOWER($1) ORDER BY created_at DESC LIMIT 1",
+      [email.trim()]
+    );
+    return res.rows[0];
+  },
+
+  // Delete OTP
+  async deleteOTP(email) {
+    await pool.query("DELETE FROM password_resets WHERE LOWER(email) = LOWER($1)", [email.trim()]);
+  },
+
+  // Get all employees (mapped for Login.jsx)
+  async getAllEmployees() {
+    const query = `
+      SELECT 
+        id, 
+        name, 
+        email, 
+        employee_id AS employee_code, 
+        role AS job_role, 
+        CASE WHEN is_active THEN 'Active' ELSE 'Inactive' END AS status, 
+        current_salary, 
+        dept, 
+        designation, 
+        joining_date, 
+        reporting_manager, 
+        phone_no, 
+        kpi, 
+        tabs_enabled,
+        enabled_tabs
+      FROM users 
+      ORDER BY id ASC
+    `;
+    const res = await pool.query(query);
+    return res.rows;
+  },
+
+  // Add new employee / user
+  async addEmployee({ employee_code, name, email, passwordHash, job_role, status, current_salary, dept, designation, joining_date, reporting_manager, phone_no, kpi, tabs_enabled, enabled_tabs }) {
+    const isActive = status === 'Active';
+    const query = `
+      INSERT INTO users (
+        employee_id, name, email, password, role, is_active, 
+        current_salary, dept, designation, joining_date, 
+        reporting_manager, phone_no, kpi, tabs_enabled, enabled_tabs
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      RETURNING id, employee_id AS employee_code, name, email, role AS job_role, tabs_enabled, enabled_tabs
+    `;
+    const res = await pool.query(query, [
+      employee_code.trim(),
+      name.trim(),
+      email.trim(),
+      passwordHash,
+      job_role.toLowerCase().trim(),
+      isActive,
+      current_salary ? parseFloat(current_salary) : null,
+      dept ? dept.trim() : null,
+      designation ? designation.trim() : null,
+      joining_date ? joining_date : null,
+      reporting_manager ? reporting_manager.trim() : null,
+      phone_no ? phone_no.trim() : null,
+      kpi ? kpi.trim() : null,
+      tabs_enabled || false,
+      enabled_tabs || '1,2,3,4'
+    ]);
+
+    // Sync to employees table
+    try {
+      const nameParts = name.trim().split(/\s+/);
+      const firstName = nameParts[0] || "";
+      const lastName = nameParts.slice(1).join(" ") || "";
+      await pool.query(`
+        INSERT INTO employees (employee_id, first_name, last_name, email, status, job_role, dept, designation, current_salary, joining_date, reporting_manager, phone_no, kpi, tabs_enabled, enabled_tabs)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ON CONFLICT (employee_id) DO UPDATE SET
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name,
+          email = EXCLUDED.email,
+          status = EXCLUDED.status,
+          job_role = EXCLUDED.job_role,
+          dept = EXCLUDED.dept,
+          designation = EXCLUDED.designation,
+          current_salary = EXCLUDED.current_salary,
+          joining_date = EXCLUDED.joining_date,
+          reporting_manager = EXCLUDED.reporting_manager,
+          phone_no = EXCLUDED.phone_no,
+          kpi = EXCLUDED.kpi,
+          tabs_enabled = EXCLUDED.tabs_enabled,
+          enabled_tabs = EXCLUDED.enabled_tabs
+      `, [
+        employee_code.trim(),
+        firstName,
+        lastName,
+        email.trim(),
+        status,
+        job_role,
+        dept,
+        designation,
+        current_salary ? parseFloat(current_salary) : null,
+        joining_date ? joining_date : null,
+        reporting_manager ? reporting_manager : 'N/A',
+        phone_no,
+        kpi,
+        tabs_enabled || false,
+        enabled_tabs || '1,2,3,4'
+      ]);
+    } catch (err) {
+      console.error("Failed to create/sync employee profile in employees table", err.message);
+    }
+
+    return res.rows[0];
+  },
+
+  // Update existing employee / user
+  async updateEmployee({ employee_code, name, email, job_role, status, current_salary, dept, designation, joining_date, reporting_manager, phone_no, kpi, tabs_enabled, enabled_tabs }) {
+    const isActive = status === 'Active';
+    const query = `
+      UPDATE users SET
+        name = $1,
+        email = $2,
+        role = $3,
+        is_active = $4,
+        current_salary = $5,
+        dept = $6,
+        designation = $7,
+        joining_date = $8,
+        reporting_manager = $9,
+        phone_no = $10,
+        kpi = $11,
+        tabs_enabled = $12,
+        enabled_tabs = $13,
+        updated_at = NOW()
+      WHERE LOWER(employee_id) = LOWER($14)
+      RETURNING id, employee_id AS employee_code, name, email, role AS job_role, tabs_enabled, enabled_tabs
+    `;
+    const res = await pool.query(query, [
+      name.trim(),
+      email.trim(),
+      job_role.toLowerCase().trim(),
+      isActive,
+      current_salary ? parseFloat(current_salary) : null,
+      dept ? dept.trim() : null,
+      designation ? designation.trim() : null,
+      joining_date ? joining_date : null,
+      reporting_manager ? reporting_manager.trim() : null,
+      phone_no ? phone_no.trim() : null,
+      kpi ? kpi.trim() : null,
+      tabs_enabled || false,
+      enabled_tabs || '1,2,3,4',
+      employee_code.trim()
+    ]);
+
+    // Sync to employees table
+    try {
+      const nameParts = name.trim().split(/\s+/);
+      const firstName = nameParts[0] || "";
+      const lastName = nameParts.slice(1).join(" ") || "";
+      await pool.query(`
+        INSERT INTO employees (employee_id, first_name, last_name, email, status, job_role, dept, designation, current_salary, joining_date, reporting_manager, phone_no, kpi, tabs_enabled, enabled_tabs)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ON CONFLICT (employee_id) DO UPDATE SET
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name,
+          email = EXCLUDED.email,
+          status = EXCLUDED.status,
+          job_role = EXCLUDED.job_role,
+          dept = EXCLUDED.dept,
+          designation = EXCLUDED.designation,
+          current_salary = EXCLUDED.current_salary,
+          joining_date = EXCLUDED.joining_date,
+          reporting_manager = EXCLUDED.reporting_manager,
+          phone_no = EXCLUDED.phone_no,
+          kpi = EXCLUDED.kpi,
+          tabs_enabled = EXCLUDED.tabs_enabled,
+          enabled_tabs = EXCLUDED.enabled_tabs
+      `, [
+        employee_code.trim(),
+        firstName,
+        lastName,
+        email.trim(),
+        status,
+        job_role,
+        dept,
+        designation,
+        current_salary ? parseFloat(current_salary) : null,
+        joining_date ? joining_date : null,
+        reporting_manager,
+        phone_no,
+        kpi,
+        tabs_enabled || false,
+        enabled_tabs || '1,2,3,4'
+      ]);
+    } catch (err) {
+      console.error("Failed to sync employee update to employees table", err.message);
+    }
+
+    return res.rows[0];
+  },
+
+  // Delete employee / user
+  async deleteEmployee(employee_code) {
+    await pool.query("DELETE FROM users WHERE LOWER(employee_id) = LOWER($1)", [employee_code.trim()]);
+    try {
+      await pool.query("DELETE FROM employees WHERE LOWER(employee_id) = LOWER($1)", [employee_code.trim()]);
+    } catch (err) {
+      console.error("Failed to delete from employees table", err.message);
+    }
+  },
+
+  // Toggle tabs_enabled for employee
+  async toggleEmployeeTabs(employee_code, tabs_enabled) {
+    const query = "UPDATE users SET tabs_enabled = $1, updated_at = NOW() WHERE LOWER(employee_id) = LOWER($2) RETURNING id, employee_id, tabs_enabled";
+    const res = await pool.query(query, [tabs_enabled, employee_code.trim()]);
+
+    try {
+      await pool.query("UPDATE employees SET tabs_enabled = $1 WHERE LOWER(employee_id) = LOWER($2)", [tabs_enabled, employee_code.trim()]);
+    } catch (err) {
+      console.error("Failed to sync toggle-tabs to employees table", err.message);
+    }
+
+    return res.rows[0];
+  },
+
+  // Update enabled_tabs for employee
+  async updateEmployeeTabs(employee_code, enabled_tabs) {
+    const query = "UPDATE users SET enabled_tabs = $1, updated_at = NOW() WHERE LOWER(employee_id) = LOWER($2) RETURNING id, employee_id, enabled_tabs";
+    const res = await pool.query(query, [enabled_tabs, employee_code.trim()]);
+
+    try {
+      await pool.query("UPDATE employees SET enabled_tabs = $1 WHERE LOWER(employee_id) = LOWER($2)", [enabled_tabs, employee_code.trim()]);
+    } catch (err) {
+      console.error("Failed to sync enabled_tabs to employees table", err.message);
+    }
+
+    return res.rows[0];
+  },
+
+  // Get employee profile by code
+  async getEmployeeByCode(employee_id) {
+    const query = `
+      SELECT 
+        id, 
+        name, 
+        name AS first_name,
+        email, 
+        employee_id, 
+        role, 
+        is_active, 
+        CASE WHEN is_active THEN 'Active' ELSE 'Inactive' END AS status, 
+        current_salary, 
+        dept AS department, 
+        designation, 
+        joining_date, 
+        reporting_manager, 
+        phone_no, 
+        phone_no AS phone,
+        kpi, 
+        tabs_enabled,
+        enabled_tabs,
+        dob,
+        gender,
+        nationality,
+        address_current,
+        address_permanent,
+        emergency_contact_name,
+        emergency_contact_phone,
+        education,
+        family_details,
+        doc_resume,
+        doc_id,
+        doc_cert,
+        profile_photo,
+        blood_group,
+        religion,
+        total_experience,
+        marital_status
+      FROM users 
+      WHERE LOWER(employee_id) = LOWER($1)
+    `;
+    const res = await pool.query(query, [employee_id.trim()]);
+    return res.rows[0];
+  },
+
+  // Update detailed profile of employee
+  async updateDetailedProfile(employee_id, {
+    dob, gender, nationality, address_current, address_permanent,
+    emergency_contact_name, emergency_contact_phone, education, family_details,
+    doc_resume, doc_id, doc_cert, profile_photo, blood_group, religion, total_experience, marital_status
+  }) {
+    const query = `
+      UPDATE users SET
+        dob = COALESCE($1, dob),
+        gender = COALESCE($2, gender),
+        nationality = COALESCE($3, nationality),
+        address_current = COALESCE($4, address_current),
+        address_permanent = COALESCE($5, address_permanent),
+        emergency_contact_name = COALESCE($6, emergency_contact_name),
+        emergency_contact_phone = COALESCE($7, emergency_contact_phone),
+        education = COALESCE($8, education),
+        family_details = COALESCE($9, family_details),
+        doc_resume = COALESCE($10, doc_resume),
+        doc_id = COALESCE($11, doc_id),
+        doc_cert = COALESCE($12, doc_cert),
+        profile_photo = COALESCE($13, profile_photo),
+        blood_group = COALESCE($14, blood_group),
+        religion = COALESCE($15, religion),
+        total_experience = COALESCE($16, total_experience),
+        marital_status = COALESCE($17, marital_status),
+        updated_at = NOW()
+      WHERE LOWER(employee_id) = LOWER($18)
+      RETURNING id, employee_id
+    `;
+    const res = await pool.query(query, [
+      dob || null,
+      gender || null,
+      nationality || null,
+      address_current || null,
+      address_permanent || null,
+      emergency_contact_name || null,
+      emergency_contact_phone || null,
+      education || null,
+      family_details || null,
+      doc_resume || null,
+      doc_id || null,
+      doc_cert || null,
+      profile_photo || null,
+      blood_group || null,
+      religion || null,
+      total_experience || null,
+      marital_status || null,
+      employee_id.trim()
+    ]);
+
+    // Sync to employees table
+    try {
+      await pool.query(`
+        UPDATE employees SET
+          dob = COALESCE($1, dob),
+          gender = COALESCE($2, gender),
+          nationality = COALESCE($3, nationality),
+          address_current = COALESCE($4, address_current),
+          address_permanent = COALESCE($5, address_permanent),
+          emergency_contact_name = COALESCE($6, emergency_contact_name),
+          emergency_contact_phone = COALESCE($7, emergency_contact_phone),
+          education = COALESCE($8, education),
+          family_details = COALESCE($9, family_details),
+          doc_resume = COALESCE($10, doc_resume),
+          doc_id = COALESCE($11, doc_id),
+          doc_cert = COALESCE($12, doc_cert),
+          profile_photo = COALESCE($13, profile_photo),
+          blood_group = COALESCE($14, blood_group),
+          religion = COALESCE($15, religion),
+          total_experience = COALESCE($16, total_experience),
+          marital_status = COALESCE($17, marital_status)
+        WHERE LOWER(employee_id) = LOWER($18)
+      `, [
+        dob || null,
+        gender || null,
+        nationality || null,
+        address_current || null,
+        address_permanent || null,
+        emergency_contact_name || null,
+        emergency_contact_phone || null,
+        education || null,
+        family_details || null,
+        doc_resume || null,
+        doc_id || null,
+        doc_cert || null,
+        profile_photo || null,
+        blood_group || null,
+        religion || null,
+        total_experience || null,
+        marital_status || null,
+        employee_id.trim()
+      ]);
+    } catch (err) {
+      console.error("Failed to sync detailed profile update to employees table", err.message);
+    }
+
+    return res.rows[0];
+  }
+};
+
+module.exports = AuthModel;
