@@ -112,20 +112,31 @@ const AuthController = {
         return res.status(400).json({ error: "Invalid role selected" });
       }
 
-      // Find user by employee_id and role
+      // Find user by employee_id (Employee Code) or email, and role
+      const loginIdentifier = employee_id.toLowerCase().trim();
       const user = await User.findOne({
         where: {
           [Op.and]: [
-            sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()),
+            {
+              [Op.or]: [
+                sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
+                sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
+              ]
+            },
             sequelize.where(sequelize.fn("LOWER", sequelize.col("role")), normalizedRole)
           ]
         }
       });
 
       if (!user) {
-        // Check if the employee code is registered at all (across any role)
+        // Check if the employee code or email is registered at all (across any role)
         const anyUser = await User.findOne({
-          where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim())
+          where: {
+            [Op.or]: [
+              sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
+              sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
+            ]
+          }
         });
         if (!anyUser) {
           return res.status(404).json({ error: "User doesn't exist" });
@@ -168,6 +179,7 @@ const AuthController = {
           email: user.email,
           role: user.role,
           employee_id: user.employee_id,
+          employee_code: user.employee_id,
           dept: user.dept,
           designation: user.designation,
           tabs_enabled: user.tabs_enabled || false,

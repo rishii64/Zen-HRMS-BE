@@ -149,15 +149,22 @@ const EmployeeController = {
       }
 
       // Send welcome email with login credentials
+      let emailSent = false;
+      let emailError = null;
       try {
         await sendCredentialsEmail(email.trim(), name.trim(), employee_code.trim(), defaultPassword);
+        emailSent = true;
       } catch (mailErr) {
+        emailError = mailErr.message;
         console.error("Failed to send welcome credentials email:", mailErr.message);
       }
 
       return res.status(201).json({
         success: true,
-        message: "Employee added successfully",
+        message: emailSent
+          ? `Employee added successfully! Login credentials with Employee Code (${employee_code.trim()}) have been sent to ${email.trim()}.`
+          : `Employee added successfully. (Note: Email delivery failed: ${emailError || "Check SMTP settings"}). Please share Employee Code: ${employee_code.trim()} with the user.`,
+        email_sent: emailSent,
         employee: {
           id: newUser.id,
           employee_code: newUser.employee_id,
