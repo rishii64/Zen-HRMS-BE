@@ -1,15 +1,17 @@
-const { User, Employee, Leave, Attendance, Schedule } = require("../config/db");
+const { User, Employee, Leave, Attendance } = require("../config/db");
 const { Op } = require("sequelize");
+const { getISTDateStr } = require("../utils/timezone");
 
 const HODController = {
   // GET /api/auth/hod/dashboard-stats
   async getDashboardStats(req, res) {
     try {
-      const { employee_id, role } = req.user;
+      const { employee_id } = req.user;
 
+      // Find user & department
       const user = await User.findOne({ where: { employee_id } });
       if (!user) {
-        return res.status(404).json({ error: "HOD profile not found" });
+        return res.status(404).json({ error: "User not found" });
       }
 
       let userDept = user.dept;
@@ -21,7 +23,7 @@ const HODController = {
       }
       if (!userDept) userDept = "Design";
 
-      const todayStr = new Date().toISOString().split("T")[0];
+      const todayStr = getISTDateStr();
 
       // 1. Department Employees Count
       let deptEmployees = await Employee.findAll({

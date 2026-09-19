@@ -1,12 +1,9 @@
 const { Attendance, User, Employee, Schedule, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
+const { getISTParts, getISTDateStr, getISTTimeStr } = require("../utils/timezone");
 
 const getTodayDateStr = () => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return getISTDateStr();
 };
 
 // Helper to resolve an employee's assigned schedule and determine check-in status
@@ -67,8 +64,9 @@ const resolveShiftAndStatus = async (employee_id, today, utcToday, now) => {
     }
 
     const GRACE_MINUTES = 15;
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+    const ist = getISTParts(now);
+    const currentHour = ist.hour;
+    const currentMinute = ist.minute;
     const checkInMinutes = currentHour * 60 + currentMinute;
     const shiftStartMinutes = shiftStartHour * 60 + shiftStartMinute;
 
@@ -97,9 +95,10 @@ const resolveShiftAndStatus = async (employee_id, today, utcToday, now) => {
     };
   } catch (err) {
     console.error("Error resolving shift timing:", err.message);
-    // Safe fallback to General Shift (10:00 AM)
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+    // Safe fallback to General Shift (10:00 AM) using IST
+    const ist = getISTParts(now);
+    const currentHour = ist.hour;
+    const currentMinute = ist.minute;
     const checkInMinutes = currentHour * 60 + currentMinute;
     const isLate = checkInMinutes > (10 * 60 + 15);
     return {
@@ -135,31 +134,30 @@ const AttendanceController = {
         }
       }
 
-      const todayStr = getTodayDateStr();
+      const istNow = getISTParts();
+      const todayStr = istNow.dateStr;
       let dateCondition;
 
       if (range === "week") {
-        const today = new Date();
-        const start = new Date(today);
-        start.setDate(today.getDate() - today.getDay());
+        const d = new Date(`${istNow.dateStr}T12:00:00+05:30`);
+        const dayOfWeek = d.getDay();
+        const start = new Date(d);
+        start.setDate(d.getDate() - dayOfWeek);
         const end = new Date(start);
         end.setDate(start.getDate() + 6);
         dateCondition = {
-          [Op.between]: [start.toISOString().split("T")[0], end.toISOString().split("T")[0]]
+          [Op.between]: [getISTDateStr(start), getISTDateStr(end)]
         };
       } else if (range === "month") {
-        const today = new Date();
-        const start = new Date(today.getFullYear(), today.getMonth(), 1);
-        const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-        const startStr = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-01`;
-        const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+        const startStr = `${istNow.year}-${String(istNow.month).padStart(2, "0")}-01`;
+        const lastDay = new Date(istNow.year, istNow.month, 0).getDate();
+        const endStr = `${istNow.year}-${String(istNow.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
         dateCondition = {
           [Op.between]: [startStr, endStr]
         };
       } else if (range === "year") {
-        const today = new Date();
-        const startStr = `${today.getFullYear()}-01-01`;
-        const endStr = `${today.getFullYear()}-12-31`;
+        const startStr = `${istNow.year}-01-01`;
+        const endStr = `${istNow.year}-12-31`;
         dateCondition = {
           [Op.between]: [startStr, endStr]
         };
@@ -234,7 +232,8 @@ const AttendanceController = {
   async getTodayStatus(req, res) {
     try {
       const { employee_id } = req.user;
-      const today = getTodayDateStr();
+      const istNow = getISTParts();
+      const today = istNow.dateStr;
       const utcToday = new Date().toISOString().split("T")[0];
 
       let record = await Attendance.findOne({
@@ -296,10 +295,10 @@ const AttendanceController = {
   async checkIn(req, res) {
     try {
       const { employee_id } = req.user;
-      const today = getTodayDateStr();
+      const istNow = getISTParts();
+      const today = istNow.dateStr;
       const utcToday = new Date().toISOString().split("T")[0];
-      const now = new Date();
-      const timeStr = now.toTimeString().split(" ")[0]; // "HH:MM:SS"
+      const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
 
       const user = await User.findOne({ where: { employee_id } });
       if (!user) {
@@ -317,8 +316,8 @@ const AttendanceController = {
         return res.status(400).json({ error: "Already checked in today" });
       }
 
-      // Check shift timing and determine if on-time (Present) or late (Late Present)
-      const shiftInfo = await resolveShiftAndStatus(employee_id, today, utcToday, now);
+      // Check shift timing and determine if on-time (Present) or late (Late Present) in IST
+      const shiftInfo = await resolveShiftAndStatus(employee_id, today, utcToday, new Date());
       const status = shiftInfo.status;
       const late_count = shiftInfo.late_count;
 
@@ -336,6 +335,7 @@ const AttendanceController = {
         });
       } else {
         await record.update({
+          date: today,
           check_in: timeStr,
           status,
           late_count,
@@ -362,10 +362,10 @@ const AttendanceController = {
   async checkOut(req, res) {
     try {
       const { employee_id } = req.user;
-      const today = getTodayDateStr();
+      const istNow = getISTParts();
+      const today = istNow.dateStr;
       const utcToday = new Date().toISOString().split("T")[0];
-      const now = new Date();
-      const timeStr = now.toTimeString().split(" ")[0]; // "HH:MM:SS"
+      const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
 
       const record = await Attendance.findOne({
         where: {
@@ -382,14 +382,10 @@ const AttendanceController = {
         return res.status(400).json({ error: "Already checked out today" });
       }
 
-      // Calculate work hours
-      const checkInParts = record.check_in.split(":");
-      const checkInTime = new Date();
-      checkInTime.setHours(parseInt(checkInParts[0], 10));
-      checkInTime.setMinutes(parseInt(checkInParts[1], 10));
-      checkInTime.setSeconds(parseInt(checkInParts[2], 10));
-
-      const diffMs = now - checkInTime;
+      // Calculate work hours using IST timestamps
+      const inDate = new Date(`${record.date}T${record.check_in}+05:30`);
+      const outDate = new Date(`${today}T${timeStr}+05:30`);
+      const diffMs = Math.max(0, outDate - inDate);
       const diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
 
       await record.update({

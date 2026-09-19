@@ -1,13 +1,14 @@
 const { User, Employee, Payroll, Attendance, Leave } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
+const { getISTParts } = require("../utils/timezone");
 
 const PayrollController = {
   // GET /api/auth/payroll/data/:employeeId?month=March-2026
   async getPayrollData(req, res) {
     try {
       const empId = req.params.employeeId || req.query.employee_id;
-      const monthYear = req.query.month || new Date().toLocaleString("en-IN", { month: "long", year: "numeric" });
+      const monthYear = req.query.month || new Date().toLocaleString("en-IN", { month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
 
       if (!empId) {
         return res.status(400).json({ success: false, error: "Employee code is required" });
@@ -137,8 +138,9 @@ const PayrollController = {
         "january", "february", "march", "april", "may", "june",
         "july", "august", "september", "october", "november", "december"
       ];
-      let reqYear = new Date().getFullYear();
-      let reqMonthIdx = new Date().getMonth();
+      const ist = getISTParts();
+      let reqYear = ist.year;
+      let reqMonthIdx = ist.month - 1;
       if (monthYear) {
         const parts = monthYear.trim().split(/\s+/);
         if (parts[0]) {

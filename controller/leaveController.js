@@ -1,5 +1,6 @@
 const { Leave, User, Employee } = require("../config/db");
 const { Op } = require("sequelize");
+const { getISTDateStr } = require("../utils/timezone");
 
 const LeaveController = {
   // GET /api/auth/leave
@@ -72,7 +73,7 @@ const LeaveController = {
   async getLeaveBalance(req, res) {
     try {
       const { employee_id } = req.user;
-      const todayStr = new Date().toISOString().split("T")[0];
+      const todayStr = getISTDateStr();
 
       const allLeaves = await Leave.findAll({
         where: { employee_id }
