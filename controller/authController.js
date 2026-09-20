@@ -182,6 +182,7 @@ const AuthController = {
           employee_code: user.employee_id,
           dept: user.dept,
           designation: user.designation,
+          profile_photo: user.profile_photo,
           tabs_enabled: user.tabs_enabled || false,
           enabled_tabs: user.enabled_tabs || "1,2,3,4"
         }

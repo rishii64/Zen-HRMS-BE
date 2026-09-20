@@ -2,7 +2,25 @@ const { User, Employee, Attendance } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const { sendCredentialsEmail } = require("../utils/mailer");
+
+const resolveTargetEmpId = (req, empId) => {
+  if (!empId || empId.toLowerCase().trim() === "me") {
+    if (req.user && req.user.employee_id) return req.user.employee_id;
+    const authHeader = req.headers.authorization;
+    const token = (authHeader && authHeader.startsWith("Bearer ")) 
+      ? authHeader.split(" ")[1] 
+      : (req.cookies && req.cookies.token);
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded && decoded.employee_id) return decoded.employee_id;
+      } catch (_) {}
+    }
+  }
+  return empId;
+};
 
 const EmployeeController = {
   // GET /api/auth/employees
@@ -462,10 +480,11 @@ const EmployeeController = {
   async getEmployeeByCode(req, res) {
     try {
       const { empId } = req.params;
+      const targetCode = resolveTargetEmpId(req, empId);
       const user = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("employee_id")),
-          empId.toLowerCase().trim()
+          targetCode.toLowerCase().trim()
         )
       });
 
@@ -526,6 +545,7 @@ const EmployeeController = {
   async updateDetailedProfile(req, res) {
     try {
       const { empId } = req.params;
+      const targetCode = resolveTargetEmpId(req, empId);
       const {
         dob,
         gender,
@@ -548,7 +568,7 @@ const EmployeeController = {
       const user = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("employee_id")),
-          empId.toLowerCase().trim()
+          targetCode.toLowerCase().trim()
         )
       });
 
@@ -601,7 +621,7 @@ const EmployeeController = {
         const emp = await Employee.findOne({
           where: sequelize.where(
             sequelize.fn("LOWER", sequelize.col("employee_id")),
-            empId.toLowerCase().trim()
+            targetCode.toLowerCase().trim()
           )
         });
         if (emp) {
@@ -613,7 +633,18 @@ const EmployeeController = {
 
       return res.json({
         success: true,
-        message: "Detailed profile updated successfully"
+        message: "Detailed profile updated successfully",
+        profile_photo: user.profile_photo,
+        employee: {
+          id: user.id,
+          employee_id: user.employee_id,
+          name: user.name,
+          email: user.email,
+          designation: user.designation,
+          dept: user.dept,
+          profile_photo: user.profile_photo,
+          document_status: user.document_status
+        }
       });
     } catch (err) {
       console.error("Update detailed profile error:", err.message);

@@ -191,10 +191,12 @@ const AttendanceController = {
         order: [["date", "DESC"], ["id", "DESC"]],
       });
 
-      // Enrich records with shift information from Schedule table
+      // Enrich records with shift information from Schedule table and employee profile details
       let enrichedRecords = records;
       try {
         const dates = [...new Set(records.map(r => r.date).filter(Boolean))];
+        const empIds = [...new Set(records.map(r => (r.employee_id || "").trim()).filter(Boolean))];
+
         let scheduleMap = {};
         if (dates.length > 0) {
           const schedules = await Schedule.findAll({
@@ -208,17 +210,68 @@ const AttendanceController = {
           });
         }
 
+        // Fetch User and Employee profiles for accurate designation and profile photo
+        let profileMap = {};
+        if (empIds.length > 0) {
+          const users = await User.findAll({
+            where: {
+              employee_id: { [Op.in]: empIds }
+            },
+            attributes: ["employee_id", "designation", "dept", "profile_photo"]
+          });
+          users.forEach(u => {
+            const key = (u.employee_id || "").toLowerCase().trim();
+            profileMap[key] = {
+              designation: u.designation,
+              dept: u.dept,
+              profile_photo: u.profile_photo
+            };
+          });
+
+          const employees = await Employee.findAll({
+            where: {
+              employee_id: { [Op.in]: empIds }
+            },
+            attributes: ["employee_id", "designation", "dept", "profile_photo"]
+          });
+          employees.forEach(e => {
+            const key = (e.employee_id || "").toLowerCase().trim();
+            if (!profileMap[key]) {
+              profileMap[key] = {
+                designation: e.designation,
+                dept: e.dept,
+                profile_photo: e.profile_photo
+              };
+            } else {
+              if (!profileMap[key].designation && e.designation) {
+                profileMap[key].designation = e.designation;
+              }
+              if (!profileMap[key].profile_photo && e.profile_photo) {
+                profileMap[key].profile_photo = e.profile_photo;
+              }
+            }
+          });
+        }
+
         enrichedRecords = records.map(r => {
           const plain = r.toJSON ? r.toJSON() : { ...r };
-          const key = `${(plain.employee_id || "").toLowerCase().trim()}_${plain.date}`;
-          const matchedSchedule = scheduleMap[key];
+          const eKey = (plain.employee_id || "").toLowerCase().trim();
+          const sKey = `${eKey}_${plain.date}`;
+          const matchedSchedule = scheduleMap[sKey];
+          const matchedProfile = profileMap[eKey];
+
           plain.shift_name = matchedSchedule?.shift_name || "General Shift";
           plain.shift_start = matchedSchedule?.start_time || "10:00";
           plain.shift_end = matchedSchedule?.end_time || "19:00";
+          plain.designation = matchedProfile?.designation || plain.designation || "Staff";
+          plain.profile_photo = matchedProfile?.profile_photo || plain.profile_photo || null;
+          if (matchedProfile?.dept && (!plain.dept || plain.dept === "General")) {
+            plain.dept = matchedProfile.dept;
+          }
           return plain;
         });
       } catch (enrichErr) {
-        console.warn("Could not enrich attendance with schedules:", enrichErr.message);
+        console.warn("Could not enrich attendance with schedules and profiles:", enrichErr.message);
       }
 
       return res.json({ success: true, data: enrichedRecords });
