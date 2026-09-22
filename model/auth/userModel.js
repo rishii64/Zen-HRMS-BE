@@ -47,6 +47,12 @@ module.exports = (sequelize) => {
         defaultValue: true,
       },
 
+      status: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        defaultValue: "Active",
+      },
+
       current_salary: {
         type: DataTypes.DECIMAL(12, 2),
         allowNull: true,
@@ -172,6 +178,11 @@ module.exports = (sequelize) => {
 
       total_experience: {
         type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+
+      previous_experience: {
+        type: DataTypes.STRING(100),
         allowNull: true,
       },
 

@@ -175,6 +175,11 @@ module.exports = (sequelize) => {
         allowNull: true,
       },
 
+      previous_experience: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
+
       marital_status: {
         type: DataTypes.STRING(50),
         allowNull: true,

@@ -1,4 +1,4 @@
-const { User, Employee, Payroll, Attendance, Leave } = require("../config/db");
+const { User, Employee, Payroll, Attendance, Leave, ITDeclaration } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const { getISTParts } = require("../utils/timezone");
@@ -150,6 +150,41 @@ const PayrollController = {
         if (parts[1] && !isNaN(parseInt(parts[1]))) {
           reqYear = parseInt(parts[1]);
         }
+      }
+
+      // Determine Financial Year for this payroll month (April-March)
+      const payrollFY = reqMonthIdx < 3 ? `${reqYear - 1}-${reqYear}` : `${reqYear}-${reqYear + 1}`;
+      let itDeclarationInfo = null;
+      try {
+        const itDecl = await ITDeclaration.findOne({
+          where: {
+            employee_id: user.employee_id,
+            financial_year: payrollFY,
+          },
+        });
+        if (itDecl) {
+          const comp = typeof itDecl.tax_computation === "string" ? JSON.parse(itDecl.tax_computation || "{}") : (itDecl.tax_computation || {});
+          const reg = itDecl.regime || "new";
+          const regData = reg === "old" ? comp.old_regime : comp.new_regime;
+          const calcMonthlyTds = regData?.monthly_tds;
+
+          // If TDS is unset, or if the declaration is approved, use the calculated monthly TDS
+          if (calcMonthlyTds !== undefined && (!hasCustomStructure || !tds || itDecl.status === "Approved")) {
+            tds = calcMonthlyTds;
+          }
+
+          itDeclarationInfo = {
+            id: itDecl.id,
+            status: itDecl.status,
+            regime: reg,
+            financial_year: itDecl.financial_year,
+            monthly_tds: calcMonthlyTds || 0,
+            annual_tax: regData?.total_annual_tax || 0,
+            taxable_income: regData?.net_taxable_income || 0,
+          };
+        }
+      } catch (itErr) {
+        console.warn("Payroll IT declaration lookup:", itErr.message);
       }
 
       const daysInMonth = new Date(reqYear, reqMonthIdx + 1, 0).getDate();
@@ -329,6 +364,7 @@ const PayrollController = {
           ? Math.abs((savedData.fixed_pay?.total_fixed || 0) - (basic + da + hra + allowance + conveyance + medical)) > 1
           : false,
         saved_payroll: savedData,
+        it_declaration: itDeclarationInfo,
       });
     } catch (err) {
       console.error("Get payroll data error:", err);

@@ -7,6 +7,8 @@ const LeaveController = require("../controller/leaveController");
 const HODController = require("../controller/hodController");
 const ResignationController = require("../controller/resignationController");
 const PayrollController = require("../controller/payrollController");
+const ITDeclarationController = require("../controller/itDeclarationController");
+const MediclaimController = require("../controller/mediclaimController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -20,6 +22,7 @@ router.post("/forgot-password", AuthController.forgotPassword);
 router.post("/verify-otp", AuthController.verifyOTP);
 
 // Protected routes (require valid JWT)
+router.post("/change-password", authenticate, AuthController.changePassword);
 router.patch("/users/:id/password", authenticate, AuthController.changePassword);
 
 // Administrative routes (require 'hr' role)
@@ -90,5 +93,30 @@ router.delete("/resignation/:id/cancel", authenticate, ResignationController.can
 
 // HOD Dashboard routes
 router.get("/hod/dashboard-stats", authenticate, HODController.getDashboardStats);
+
+// IT Declaration routes (Employee self-service)
+router.get("/it-declaration/my", authenticate, ITDeclarationController.getMyDeclaration);
+router.post("/it-declaration/save", authenticate, ITDeclarationController.saveDeclaration);
+router.post("/it-declaration/preview-tax", authenticate, ITDeclarationController.calculateTaxPreview);
+router.post("/it-declaration/upload-proof", authenticate, upload.single("proof_file"), ITDeclarationController.uploadProof);
+router.delete("/it-declaration/delete-proof/:declarationId/:proofId", authenticate, ITDeclarationController.deleteProof);
+
+// IT Declaration Admin / HR / Accounts review routes
+router.get("/it-declaration/all", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), ITDeclarationController.getAllDeclarations);
+router.get("/it-declaration/:id", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), ITDeclarationController.getDeclarationById);
+router.patch("/it-declaration/:id/review", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), ITDeclarationController.reviewDeclaration);
+
+// Mediclaim & Health Insurance routes (Employee self-service)
+router.get("/mediclaim/my", authenticate, MediclaimController.getMyMediclaim);
+router.post("/mediclaim/dependents", authenticate, MediclaimController.updateDependents);
+router.post("/mediclaim/upload-doc", authenticate, upload.single("doc_file"), MediclaimController.uploadSupportingDocument);
+router.post("/mediclaim/claim/submit", authenticate, MediclaimController.submitClaim);
+router.delete("/mediclaim/claim/:id/cancel", authenticate, MediclaimController.cancelClaim);
+
+// Mediclaim Admin / HR / Accounts review routes
+router.get("/mediclaim/all-claims", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getAllClaims);
+router.patch("/mediclaim/claim/:id/review", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.reviewClaim);
+router.get("/mediclaim/stats", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getMediclaimStats);
+router.post("/mediclaim/policy/manage", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.managePolicy);
 
 module.exports = router;

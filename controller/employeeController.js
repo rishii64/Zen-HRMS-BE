@@ -1,4 +1,4 @@
-const { User, Employee, Attendance } = require("../config/db");
+const { User, Employee, Attendance, Resignation } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const bcrypt = require("bcryptjs");
@@ -36,7 +36,7 @@ const EmployeeController = {
         email: user.email,
         employee_code: user.employee_id,
         job_role: user.role,
-        status: user.is_active ? "Active" : "Inactive",
+        status: user.status || (user.is_active ? "Active" : "Inactive"),
         current_salary: user.current_salary,
         dept: user.dept,
         designation: user.designation,
@@ -128,6 +128,7 @@ const EmployeeController = {
         password: passwordHash,
         role: job_role ? job_role.toLowerCase().trim() : "employee",
         is_active: isActive,
+        status: status || (isActive ? "Active" : "Inactive"),
         current_salary: current_salary ? parseFloat(current_salary) : null,
         dept: dept ? dept.trim() : null,
         designation: designation ? designation.trim() : null,
@@ -249,6 +250,7 @@ const EmployeeController = {
         email: email.trim(),
         role: job_role ? job_role.toLowerCase().trim() : "employee",
         is_active: isActive,
+        status: status || (isActive ? "Active" : "Inactive"),
         current_salary: current_salary ? parseFloat(current_salary) : null,
         dept: dept ? dept.trim() : null,
         designation: designation ? designation.trim() : null,
@@ -492,6 +494,31 @@ const EmployeeController = {
         return res.status(404).json({ success: false, error: "Employee not found" });
       }
 
+      // Check for resignation records to determine exit/relieving date
+      let resignation = null;
+      try {
+        resignation = await Resignation.findOne({
+          where: sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("employee_id")),
+            targetCode.toLowerCase().trim()
+          ),
+          order: [["id", "DESC"]]
+        });
+      } catch (err) {
+        console.warn("Could not fetch resignation details for employee:", err.message);
+      }
+
+      // Employee status: Active, Inactive, Resigned
+      const statusValue = user.status || (user.is_active ? "Active" : "Inactive");
+      const isStatusActive = String(statusValue).toLowerCase() === "active";
+      const isResigned = String(statusValue).toLowerCase() === "resigned" || (
+        !isStatusActive && resignation && ["Approved", "Accepted", "Completed", "Relieved"].includes(resignation.status)
+      );
+
+      const relievingDate = isResigned
+        ? (resignation?.hr_confirmed_lwd || resignation?.last_working_date || user.updated_at || user.updatedAt)
+        : null;
+
       const employee = {
         id: user.id,
         name: user.name,
@@ -500,7 +527,7 @@ const EmployeeController = {
         employee_id: user.employee_id,
         role: user.role,
         is_active: user.is_active,
-        status: user.is_active ? "Active" : "Inactive",
+        status: statusValue,
         current_salary: user.current_salary,
         department: user.dept,
         designation: user.designation,
@@ -530,6 +557,11 @@ const EmployeeController = {
         blood_group: user.blood_group,
         religion: user.religion,
         total_experience: user.total_experience,
+        previous_experience: user.previous_experience || user.total_experience || "",
+        is_resigned: isResigned,
+        relieving_date: relievingDate,
+        last_working_date: resignation?.last_working_date || relievingDate,
+        resignation_status: resignation?.status || (isResigned ? "Resigned" : null),
         marital_status: user.marital_status,
         document_status: user.document_status || "Not Uploaded"
       };
@@ -562,6 +594,7 @@ const EmployeeController = {
         blood_group,
         religion,
         total_experience,
+        previous_experience,
         marital_status
       } = req.body;
 
@@ -597,7 +630,8 @@ const EmployeeController = {
         bank_details: bank_details || user.bank_details,
         blood_group: blood_group || user.blood_group,
         religion: religion || user.religion,
-        total_experience: total_experience || user.total_experience,
+        total_experience: total_experience || previous_experience || user.total_experience,
+        previous_experience: previous_experience !== undefined ? previous_experience : (user.previous_experience || user.total_experience),
         marital_status: marital_status || user.marital_status
       };
 

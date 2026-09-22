@@ -29,6 +29,9 @@ const Schedule = require("../model/scheduleModel")(sequelize);
 const Leave = require("../model/leaveModel")(sequelize);
 const Resignation = require("../model/resignationModel")(sequelize);
 const Payroll = require("../model/payrollModel")(sequelize);
+const ITDeclaration = require("../model/itDeclarationModel")(sequelize);
+const MediclaimPolicy = require("../model/mediclaimModel")(sequelize);
+const MediclaimClaim = require("../model/mediclaimClaimModel")(sequelize);
 
 // Model Associations
 
@@ -172,6 +175,52 @@ Payroll.belongsTo(Employee, {
   as: "employee",
 });
 
+// 9. User <-> ITDeclaration & Employee <-> ITDeclaration
+User.hasMany(ITDeclaration, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "itDeclarations",
+});
+ITDeclaration.belongsTo(User, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "user",
+});
+
+Employee.hasMany(ITDeclaration, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "itDeclarations",
+});
+ITDeclaration.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+
+// 10. Employee <-> MediclaimPolicy & MediclaimClaim
+Employee.hasOne(MediclaimPolicy, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "mediclaimPolicy",
+});
+MediclaimPolicy.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+
+Employee.hasMany(MediclaimClaim, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "mediclaimClaims",
+});
+MediclaimClaim.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
@@ -195,4 +244,7 @@ module.exports = {
   Leave,
   Resignation,
   Payroll,
+  ITDeclaration,
+  MediclaimPolicy,
+  MediclaimClaim,
 };

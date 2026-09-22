@@ -159,14 +159,14 @@ const AuthController = {
       const token = jwt.sign(
         { id: user.id, email: user.email, role: user.role, employee_id: user.employee_id },
         process.env.JWT_SECRET,
-        { expiresIn: "1d" }
+        { expiresIn: "14h" }
       );
 
       // Set cookie (optional fallback)
       res.cookie("token", token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        maxAge: 24 * 60 * 60 * 1000 // 1 day
+        maxAge: 14 * 60 * 60 * 1000 // 14 hours
       });
 
       return res.json({
@@ -193,29 +193,47 @@ const AuthController = {
     }
   },
 
-  // PATCH /api/auth/users/:id/password
+  // POST /api/auth/change-password or PATCH /api/auth/users/:id/password
   async changePassword(req, res) {
     try {
-      const { id } = req.params;
-      const { newPassword } = req.body;
+      const id = req.params.id || req.user?.id;
+      if (!id) {
+        return res.status(401).json({ error: "Unauthorized. User ID not found." });
+      }
 
-      if (!newPassword || newPassword.length < 4) {
-        return res.status(400).json({ error: "Password must be at least 4 characters" });
+      const { currentPassword, newPassword } = req.body;
+
+      if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json({ error: "New password must be at least 6 characters long." });
       }
 
       const user = await User.findByPk(id);
       if (!user) {
-        return res.status(404).json({ error: "User not found" });
+        return res.status(404).json({ error: "User not found." });
+      }
+
+      // If updating own password or currentPassword is supplied, verify it
+      if (currentPassword !== undefined || !req.params.id) {
+        if (!currentPassword) {
+          return res.status(400).json({ error: "Current password is required." });
+        }
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+          return res.status(400).json({ error: "Current password is incorrect." });
+        }
+        if (currentPassword === newPassword) {
+          return res.status(400).json({ error: "New password cannot be the same as your current password." });
+        }
       }
 
       const passwordHash = await bcrypt.hash(newPassword, 10);
       user.password = passwordHash;
       await user.save();
 
-      return res.json({ success: true, message: "Password updated successfully" });
+      return res.json({ success: true, message: "Password updated successfully." });
     } catch (err) {
       console.error("Change password error:", err.message);
-      return res.status(500).json({ error: "Failed to update password" });
+      return res.status(500).json({ error: "Failed to update password. Please try again." });
     }
   },
 
