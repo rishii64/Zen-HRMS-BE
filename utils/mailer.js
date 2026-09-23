@@ -20,9 +20,10 @@ const transporter = nodemailer.createTransport(
 );
 
 const sendOTPEmail = async (email, otp) => {
+  const normalizedEmail = (email || "").toLowerCase().trim();
   const mailOptions = {
     from: `"HRMS Portal" <${process.env.SMTP_MAIL}>`,
-    to: email,
+    to: normalizedEmail,
     subject: "Password Reset OTP - HRMS Portal",
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
@@ -42,6 +43,7 @@ const sendOTPEmail = async (email, otp) => {
 };
 
 const sendCredentialsEmail = async (email, name, employeeCode, password) => {
+  const normalizedEmail = (email || "").toLowerCase().trim();
   const portalUrl =
     process.env.PORTAL_URL ||
     process.env.FRONTEND_URL ||
@@ -49,7 +51,7 @@ const sendCredentialsEmail = async (email, name, employeeCode, password) => {
 
   const mailOptions = {
     from: `"Zentelex HRMS" <${process.env.SMTP_MAIL}>`,
-    to: email,
+    to: normalizedEmail,
     subject: `Welcome to Zentelex - Your HRMS Login Credentials (${employeeCode})`,
     text: `Dear ${name},
 

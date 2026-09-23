@@ -10,7 +10,7 @@ const PayrollController = require("../controller/payrollController");
 const ITDeclarationController = require("../controller/itDeclarationController");
 const MediclaimController = require("../controller/mediclaimController");
 const authenticate = require("../middleware/Authorization");
-const { authorizeRoles } = require("../middleware/Authorization");
+const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
 
 const router = express.Router();
@@ -38,6 +38,9 @@ router.post("/employees/delete", EmployeeController.deleteEmployee);
 router.post("/employees/toggle-tabs", EmployeeController.toggleEmployeeTabs);
 router.post("/employees/update-tabs", EmployeeController.updateEmployeeTabs);
 router.get("/employee/:empId", EmployeeController.getEmployeeByCode);
+router.get("/employee/profile/:empId", EmployeeController.getEmployeeByCode);
+// router.get("/employees/profile/:empId", EmployeeController.getEmployeeByCode);
+// router.get("/employees/:empId", EmployeeController.getEmployeeByCode);
 router.get("/employees/:empId/salary", EmployeeController.getSalaryStructure);
 router.post("/employees/:empId/salary", EmployeeController.updateSalaryStructure);
 router.get("/employee/:empId/salary", EmployeeController.getSalaryStructure);
@@ -66,6 +69,7 @@ router.get("/attendance", authenticate, AttendanceController.getAttendance);
 router.get("/attendance/today-status", authenticate, AttendanceController.getTodayStatus);
 router.post("/attendance/check-in", authenticate, AttendanceController.checkIn);
 router.post("/attendance/check-out", authenticate, AttendanceController.checkOut);
+router.post("/attendance/auto-clock-out", authenticateAllowExpired, AttendanceController.autoClockOut);
 router.post("/attendance/mark", authenticate, AttendanceController.markManualAttendance);
 
 // Work Schedule & Shift Planning routes

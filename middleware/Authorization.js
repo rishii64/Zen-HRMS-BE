@@ -31,6 +31,46 @@ const authorizeRoles = (...roles) => {
   };
 };
 
+// Middleware allowing expired JWT verification for session expiry auto-clockout
+const authenticateAllowExpired = (req, res, next) => {
+  let token = req.cookies?.token;
+
+  if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+
+  if (!token && req.body?.token) {
+    token = req.body.token;
+  }
+
+  if (!token) {
+    return res.status(401).json({ error: "Access denied. No token provided." });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    return next();
+  } catch (error) {
+    if (error.name === "TokenExpiredError") {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
+        req.user = decoded;
+        return next();
+      } catch (innerErr) {
+        const decoded = jwt.decode(token);
+        if (decoded && (decoded.employee_id || decoded.id)) {
+          req.user = decoded;
+          return next();
+        }
+      }
+    }
+    return res.status(401).json({ error: "Invalid token." });
+  }
+};
+
 // Export authenticate as primary function, with authorizeRoles attached
 module.exports = authenticate;
 module.exports.authorizeRoles = authorizeRoles;
+module.exports.authenticateAllowExpired = authenticateAllowExpired;
+

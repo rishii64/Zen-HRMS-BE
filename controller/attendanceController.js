@@ -1,6 +1,7 @@
 const { Attendance, User, Employee, Schedule, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 const { getISTParts, getISTDateStr, getISTTimeStr } = require("../utils/timezone");
+const { autoClockOutExpiredAttendance } = require("../services/autoClockOutService");
 
 const getTodayDateStr = () => {
   return getISTDateStr();
@@ -116,7 +117,7 @@ const AttendanceController = {
   // GET /api/auth/attendance
   async getAttendance(req, res) {
     try {
-      const { date, dept, range } = req.query;
+      const { date, dept, range, scope, emp_id } = req.query;
       const { role, employee_id } = req.user;
 
       // Find user details to check department
@@ -170,7 +171,11 @@ const AttendanceController = {
       };
 
       // Enforce visibility rules
-      if (role === "hr" || role === "admin" || role === "hrmanager") {
+      if (scope === "my" || emp_id) {
+        // Specifically requested personal/target attendance logs
+        const targetEmpId = (emp_id && (role === "hr" || role === "admin")) ? emp_id : employee_id;
+        whereClause.employee_id = { [Op.iLike]: targetEmpId.trim() };
+      } else if (role === "hr" || role === "admin" || role === "hrmanager") {
         // HR/Admin can see all, with optional filter by dept
         if (dept && dept !== "All") {
           whereClause.dept = { [Op.iLike]: dept.trim() };
@@ -183,8 +188,13 @@ const AttendanceController = {
         }
       } else {
         // Employees can only view their own attendance log history
-        whereClause.employee_id = employee_id;
+        whereClause.employee_id = { [Op.iLike]: employee_id.trim() };
       }
+
+      // Automatically finalize any unclosed attendance logs past assigned shift & 14hr session
+      await autoClockOutExpiredAttendance().catch((e) =>
+        console.warn("[getAttendance Auto Clock-Out Check Warning]:", e.message)
+      );
 
       const records = await Attendance.findAll({
         where: whereClause,
@@ -285,6 +295,12 @@ const AttendanceController = {
   async getTodayStatus(req, res) {
     try {
       const { employee_id } = req.user;
+
+      // Automatically clock-out if assigned shift ended and 14hr session threshold elapsed
+      await autoClockOutExpiredAttendance({ employee_id }).catch((e) =>
+        console.warn("[getTodayStatus Auto Clock-Out Warning]:", e.message)
+      );
+
       const istNow = getISTParts();
       const today = istNow.dateStr;
       const utcToday = new Date().toISOString().split("T")[0];
@@ -525,7 +541,31 @@ const AttendanceController = {
       console.error("Mark manual attendance error:", err.message);
       return res.status(500).json({ error: "Failed to mark manual attendance" });
     }
-  }
+  },
+
+  // POST /api/auth/attendance/auto-clock-out
+  async autoClockOut(req, res) {
+    try {
+      const { employee_id } = req.user;
+      const { forceIfShiftEnded } = req.body || {};
+
+      const result = await autoClockOutExpiredAttendance({
+        employee_id,
+        forceIfShiftEnded: forceIfShiftEnded !== undefined ? forceIfShiftEnded : true,
+      });
+
+      return res.json({
+        success: true,
+        message: result.updatedCount > 0
+          ? "Employee automatically clocked out successfully."
+          : "No unclosed shift pending clock-out.",
+        ...result,
+      });
+    } catch (err) {
+      console.error("Auto clock-out error:", err.message);
+      return res.status(500).json({ error: "Failed to perform automatic clock-out" });
+    }
+  },
 };
 
 module.exports = AttendanceController;

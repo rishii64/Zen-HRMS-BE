@@ -87,11 +87,14 @@ const EmployeeController = {
         return res.status(400).json({ error: "All fields are required" });
       }
 
+      const normalizedEmail = email.toLowerCase().trim();
+      const normalizedEmployeeCode = employee_code.trim();
+
       // Check if employee code or email already exists
       const existingUserByCode = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("employee_id")),
-          employee_code.toLowerCase().trim()
+          normalizedEmployeeCode.toLowerCase()
         )
       });
       if (existingUserByCode) {
@@ -101,7 +104,7 @@ const EmployeeController = {
       const existingUserByEmail = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("email")),
-          email.toLowerCase().trim()
+          normalizedEmail
         )
       });
       if (existingUserByEmail) {
@@ -122,9 +125,9 @@ const EmployeeController = {
       const isActive = status === "Active";
 
       const newUser = await User.create({
-        employee_id: employee_code.trim(),
+        employee_id: normalizedEmployeeCode,
         name: name.trim(),
-        email: email.trim(),
+        email: normalizedEmail,
         password: passwordHash,
         role: job_role ? job_role.toLowerCase().trim() : "employee",
         is_active: isActive,
@@ -147,10 +150,10 @@ const EmployeeController = {
         const lastName = nameParts.slice(1).join(" ") || "";
 
         await Employee.create({
-          employee_id: employee_code.trim(),
+          employee_id: normalizedEmployeeCode,
           first_name: firstName,
           last_name: lastName,
-          email: email.trim(),
+          email: normalizedEmail,
           status: status || "Active",
           job_role: job_role || "employee",
           dept: dept ? dept.trim() : null,
@@ -171,7 +174,7 @@ const EmployeeController = {
       let emailSent = false;
       let emailError = null;
       try {
-        await sendCredentialsEmail(email.trim(), name.trim(), employee_code.trim(), defaultPassword);
+        await sendCredentialsEmail(normalizedEmail, name.trim(), normalizedEmployeeCode, defaultPassword);
         emailSent = true;
       } catch (mailErr) {
         emailError = mailErr.message;
@@ -181,8 +184,8 @@ const EmployeeController = {
       return res.status(201).json({
         success: true,
         message: emailSent
-          ? `Employee added successfully! Login credentials with Employee Code (${employee_code.trim()}) have been sent to ${email.trim()}.`
-          : `Employee added successfully. (Note: Email delivery failed: ${emailError || "Check SMTP settings"}). Please share Employee Code: ${employee_code.trim()} with the user.`,
+          ? `Employee added successfully! Login credentials with Employee Code (${normalizedEmployeeCode}) have been sent to ${normalizedEmail}.`
+          : `Employee added successfully. (Note: Email delivery failed: ${emailError || "Check SMTP settings"}). Please share Employee Code: ${normalizedEmployeeCode} with the user.`,
         email_sent: emailSent,
         employee: {
           id: newUser.id,
@@ -244,10 +247,11 @@ const EmployeeController = {
       }
 
       const isActive = status === "Active";
+      const normalizedEmail = email ? email.toLowerCase().trim() : null;
 
-      await user.update({
+      const userUpdateFields = {
         name: name.trim(),
-        email: email.trim(),
+        ...(normalizedEmail ? { email: normalizedEmail } : {}),
         role: job_role ? job_role.toLowerCase().trim() : "employee",
         is_active: isActive,
         status: status || (isActive ? "Active" : "Inactive"),
@@ -258,9 +262,23 @@ const EmployeeController = {
         reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
-        tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
-        enabled_tabs: tabsString || "1,2,3,4"
-      });
+      };
+
+      if (tabs_enabled !== undefined) {
+        userUpdateFields.tabs_enabled = tabs_enabled === true || tabs_enabled === "true";
+      }
+
+      if (enabled_tabs !== undefined && enabled_tabs !== null) {
+        let tabsString = "";
+        if (Array.isArray(enabled_tabs)) {
+          tabsString = enabled_tabs.join(",");
+        } else if (typeof enabled_tabs === "string") {
+          tabsString = enabled_tabs;
+        }
+        userUpdateFields.enabled_tabs = tabsString;
+      }
+
+      await user.update(userUpdateFields);
 
       // Sync to employees table
       try {
@@ -268,31 +286,33 @@ const EmployeeController = {
         const firstName = nameParts[0] || "";
         const lastName = nameParts.slice(1).join(" ") || "";
 
+        const empDefaults = {
+          first_name: firstName,
+          last_name: lastName,
+          email: normalizedEmail || user.email,
+          status: status || "Active",
+          job_role: job_role || "employee",
+          dept: dept ? dept.trim() : null,
+          designation: designation ? designation.trim() : null,
+          current_salary: current_salary ? parseFloat(current_salary) : null,
+          joining_date: joining_date || null,
+          reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+          phone_no: phone_no ? phone_no.trim() : null,
+          kpi: kpi ? kpi.trim() : null,
+          tabs_enabled: userUpdateFields.tabs_enabled !== undefined ? userUpdateFields.tabs_enabled : user.tabs_enabled,
+          enabled_tabs: userUpdateFields.enabled_tabs !== undefined ? userUpdateFields.enabled_tabs : user.enabled_tabs
+        };
+
         const [emp, created] = await Employee.findOrCreate({
           where: { employee_id: employee_code.trim() },
-          defaults: {
-            first_name: firstName,
-            last_name: lastName,
-            email: email.trim(),
-            status: status || "Active",
-            job_role: job_role || "employee",
-            dept: dept ? dept.trim() : null,
-            designation: designation ? designation.trim() : null,
-            current_salary: current_salary ? parseFloat(current_salary) : null,
-            joining_date: joining_date || null,
-            reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
-            phone_no: phone_no ? phone_no.trim() : null,
-            kpi: kpi ? kpi.trim() : null,
-            tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
-            enabled_tabs: tabsString || "1,2,3,4"
-          }
+          defaults: empDefaults
         });
 
         if (!created) {
-          await emp.update({
+          const empUpdateFields = {
             first_name: firstName,
             last_name: lastName,
-            email: email.trim(),
+            ...(normalizedEmail ? { email: normalizedEmail } : {}),
             status: status || "Active",
             job_role: job_role || "employee",
             dept: dept ? dept.trim() : null,
@@ -302,9 +322,14 @@ const EmployeeController = {
             reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
             phone_no: phone_no ? phone_no.trim() : null,
             kpi: kpi ? kpi.trim() : null,
-            tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
-            enabled_tabs: tabsString || "1,2,3,4"
-          });
+          };
+          if (userUpdateFields.tabs_enabled !== undefined) {
+            empUpdateFields.tabs_enabled = userUpdateFields.tabs_enabled;
+          }
+          if (userUpdateFields.enabled_tabs !== undefined) {
+            empUpdateFields.enabled_tabs = userUpdateFields.enabled_tabs;
+          }
+          await emp.update(empUpdateFields);
         }
       } catch (err) {
         console.error("Failed to sync employee update to employees table:", err.message);
@@ -566,7 +591,7 @@ const EmployeeController = {
         document_status: user.document_status || "Not Uploaded"
       };
 
-      return res.json({ success: true, employee });
+      return res.json({ success: true, employee, data: employee });
     } catch (err) {
       console.error("Get employee profile error:", err.message);
       return res.status(500).json({ success: false, error: "Failed to retrieve employee profile" });

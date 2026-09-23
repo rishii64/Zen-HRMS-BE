@@ -48,10 +48,12 @@ const AuthController = {
       // Hash password
       const passwordHash = await bcrypt.hash(password, 10);
 
+      const normalizedEmail = email.toLowerCase().trim();
+
       // Create user
       const newUser = await User.create({
         name: name.trim(),
-        email: email.trim(),
+        email: normalizedEmail,
         password: passwordHash,
         role: normalizedRole,
         employee_id: code,
@@ -66,7 +68,7 @@ const AuthController = {
               { employee_id: code },
               sequelize.where(
                 sequelize.fn("LOWER", sequelize.col("email")),
-                email.toLowerCase().trim()
+                normalizedEmail
               )
             ]
           }
@@ -80,7 +82,7 @@ const AuthController = {
             employee_id: code,
             first_name: firstName,
             last_name: lastName,
-            email: email.trim(),
+            email: normalizedEmail,
             status: "Active",
             job_role: "employee"
           });
@@ -261,16 +263,18 @@ const AuthController = {
       // OTP valid for 5 minutes
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
+      const normalizedEmail = email.toLowerCase().trim();
+
       // Save OTP record to database
       await PasswordReset.destroy({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("email")),
-          email.toLowerCase().trim()
+          normalizedEmail
         )
       });
 
       await PasswordReset.create({
-        email: email.trim(),
+        email: normalizedEmail,
         otp: otp.trim(),
         expires_at: expiresAt
       });
@@ -278,10 +282,10 @@ const AuthController = {
       // Send the OTP via email
       let emailSent = true;
       try {
-        await sendOTPEmail(email, otp);
+        await sendOTPEmail(normalizedEmail, otp);
       } catch (mailErr) {
-        console.warn(`[OTP Service] Failed to send email to ${email}:`, mailErr.message);
-        console.info(`[DEVELOPER NOTICE] Generated OTP for ${email}: ${otp}`);
+        console.warn(`[OTP Service] Failed to send email to ${normalizedEmail}:`, mailErr.message);
+        console.info(`[DEVELOPER NOTICE] Generated OTP for ${normalizedEmail}: ${otp}`);
         emailSent = false;
       }
 
