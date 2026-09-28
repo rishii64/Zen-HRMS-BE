@@ -35,6 +35,16 @@ module.exports = (sequelize) => {
         },
       },
 
+      work_email: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+
+      personal_email: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+
       status: {
         type: DataTypes.STRING(50),
         allowNull: false,
@@ -204,6 +214,56 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(50),
         allowNull: false,
         defaultValue: "Not Uploaded",
+      },
+
+      pan_no: {
+        type: DataTypes.STRING(20),
+        allowNull: true,
+      },
+
+      aadhaar_no: {
+        type: DataTypes.STRING(20),
+        allowNull: true,
+      },
+
+      driving_license: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+
+      doc_pan: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+
+      doc_aadhaar: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+
+      doc_payslips: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      doc_exp_cert: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      doc_last_company: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      uploaded_documents: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      last_company_details: {
+        type: DataTypes.TEXT,
+        allowNull: true,
       },
 
       salary_structure: {

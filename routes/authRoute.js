@@ -9,6 +9,7 @@ const ResignationController = require("../controller/resignationController");
 const PayrollController = require("../controller/payrollController");
 const ITDeclarationController = require("../controller/itDeclarationController");
 const MediclaimController = require("../controller/mediclaimController");
+const KpiController = require("../controller/kpiController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -53,14 +54,9 @@ router.get("/payroll/data/:employeeId", PayrollController.getPayrollData);
 router.post("/payroll/finalize", PayrollController.finalizePayroll);
 router.get("/payroll/history/:employeeId", PayrollController.getPayrollHistory);
 
-// Detailed Profile Update with Document Upload
+// Detailed Profile Update with Document Upload (supports multiple files)
 router.post("/employee/:empId/profile",
-  upload.fields([
-    { name: "doc_resume", maxCount: 1 },
-    { name: "doc_id", maxCount: 1 },
-    { name: "doc_cert", maxCount: 1 },
-    { name: "profile_photo", maxCount: 1 }
-  ]),
+  upload.any(),
   EmployeeController.updateDetailedProfile
 );
 
@@ -70,6 +66,7 @@ router.get("/attendance/today-status", authenticate, AttendanceController.getTod
 router.post("/attendance/check-in", authenticate, AttendanceController.checkIn);
 router.post("/attendance/check-out", authenticate, AttendanceController.checkOut);
 router.post("/attendance/auto-clock-out", authenticateAllowExpired, AttendanceController.autoClockOut);
+router.post("/attendance/portal-logout", authenticateAllowExpired, AttendanceController.portalLogout);
 router.post("/attendance/mark", authenticate, AttendanceController.markManualAttendance);
 
 // Work Schedule & Shift Planning routes
@@ -88,11 +85,28 @@ router.delete("/leave/:id/cancel", authenticate, LeaveController.cancelLeave);
 // Resignation & Separation routes
 router.get("/resignation", authenticate, ResignationController.getResignations);
 router.get("/resignation/my", authenticate, ResignationController.getMyResignation);
+router.get("/resignation/employee/:id/history", authenticate, ResignationController.getEmployeeResignationHistory);
 router.get("/resignation/:id", authenticate, ResignationController.getResignationById);
 router.post("/resignation/apply", authenticate, ResignationController.applyResignation);
+
+// Hierarchical Multi-Level Approvals: TL -> Manager -> HOD -> HR
+router.patch("/resignation/:id/tl-action", authenticate, ResignationController.tlReview);
 router.patch("/resignation/:id/manager-action", authenticate, ResignationController.managerReview);
+router.patch("/resignation/:id/hod-action", authenticate, ResignationController.hodReview);
+router.patch("/resignation/:id/submit-handover", authenticate, ResignationController.submitHandover);
+router.patch("/resignation/:id/confirm-handover", authenticate, ResignationController.confirmHandover);
 router.patch("/resignation/:id/hr-action", authenticate, ResignationController.hrReview);
+
+// Serial Department Clearances & Custom Departments
+router.post("/resignation/:id/raise-clearance", authenticate, ResignationController.raiseClearance);
+router.post("/resignation/:id/add-clearance-dept", authenticate, ResignationController.addCustomClearanceDept);
+router.patch("/resignation/:id/clear-dept", authenticate, ResignationController.clearDepartmentStep);
 router.patch("/resignation/:id/clearance", authenticate, ResignationController.updateClearance);
+
+// Exit Interview Form (Details & 10 Questions)
+router.post("/resignation/:id/raise-exit-interview", authenticate, ResignationController.raiseExitInterview);
+router.patch("/resignation/:id/submit-exit-interview", authenticate, ResignationController.submitExitInterview);
+
 router.delete("/resignation/:id/cancel", authenticate, ResignationController.cancelResignation);
 
 // HOD Dashboard routes
@@ -122,5 +136,31 @@ router.get("/mediclaim/all-claims", authenticate, authorizeRoles("hr", "admin", 
 router.patch("/mediclaim/claim/:id/review", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.reviewClaim);
 router.get("/mediclaim/stats", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getMediclaimStats);
 router.post("/mediclaim/policy/manage", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.managePolicy);
+
+// ==========================================
+// KPI & Performance Management Routes
+// ==========================================
+
+// Master Templates (HR / HOD / Admin)
+router.get("/kpi/templates", authenticate, KpiController.getTemplates);
+router.post("/kpi/templates", authenticate, authorizeRoles("hr", "admin"), KpiController.createTemplate);
+router.put("/kpi/templates/:id", authenticate, authorizeRoles("hr", "admin"), KpiController.updateTemplate);
+router.delete("/kpi/templates/:id", authenticate, authorizeRoles("hr", "admin"), KpiController.deleteTemplate);
+
+// Goal Assignment (HR / HOD / Admin)
+router.post("/kpi/assign", authenticate, authorizeRoles("hr", "admin", "hod"), KpiController.assignKpi);
+router.post("/kpi/bulk-assign", authenticate, authorizeRoles("hr", "admin", "hod"), KpiController.bulkAssignDepartment);
+
+// Employee Self-Assessment
+router.get("/kpi/my-goals", authenticate, KpiController.getMyKpi);
+router.post("/kpi/my-goals/save", authenticate, KpiController.saveSelfAssessment);
+
+// HOD / Manager Review
+router.get("/kpi/team-reviews", authenticate, authorizeRoles("hod", "hr", "admin"), KpiController.getTeamReviews);
+router.post("/kpi/team-reviews/:id/evaluate", authenticate, authorizeRoles("hod", "hr", "admin"), KpiController.evaluateTeamMember);
+
+// HR Admin Calibration & Company-wide view
+router.get("/kpi/all-cycles", authenticate, authorizeRoles("hr", "admin"), KpiController.getAllCompanyKpis);
+router.post("/kpi/calibrate/:id", authenticate, authorizeRoles("hr", "admin"), KpiController.calibrateAndApprove);
 
 module.exports = router;

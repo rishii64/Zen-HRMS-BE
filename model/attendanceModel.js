@@ -47,6 +47,10 @@ module.exports = (sequelize) => {
         allowNull: false,
         defaultValue: 0,
       },
+      notes: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
     },
     {
       tableName: "attendance",

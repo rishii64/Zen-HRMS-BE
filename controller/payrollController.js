@@ -98,6 +98,7 @@ const PayrollController = {
       let it = 0;
       let pf = 0;
       let esi = 0;
+      let mediclaim = 0;
       let tds = 0;
       let lop = 0;
 
@@ -117,11 +118,20 @@ const PayrollController = {
         it = d.income_tax != null ? parseFloat(d.income_tax) : 0;
         pf = d.pf != null ? parseFloat(d.pf) : 0;
         esi = d.esi != null ? parseFloat(d.esi) : 0;
+        mediclaim = d.mediclaim != null ? parseFloat(d.mediclaim) : 0;
         tds = d.tds != null ? parseFloat(d.tds) : 0;
         lop = d.lop != null ? parseFloat(d.lop) : 0;
+
+        if (basic > 15000) {
+          if (!mediclaim && esi) mediclaim = esi;
+          esi = 0;
+        } else {
+          if (!esi && mediclaim) esi = mediclaim;
+          mediclaim = 0;
+        }
       } else if (currentSalary > 0) {
-        basic = Math.round(currentSalary * 0.40);
-        da = Math.round(currentSalary * 0.10);
+        basic = Math.round(currentSalary * 0.45);
+        da = 0;
         hra = Math.round(currentSalary * 0.40);
         conveyance = Math.round(currentSalary * 0.05) || 1600;
         medical = Math.round(currentSalary * 0.05) || 1250;
@@ -129,7 +139,13 @@ const PayrollController = {
         allowance = Math.max(0, currentSalary - assigned);
 
         pf = Math.round(basic * 0.12);
-        esi = currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0;
+        if (basic <= 15000) {
+          esi = currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0;
+          mediclaim = 0;
+        } else {
+          esi = 0;
+          mediclaim = currentSalary > 25000 ? 750 : 500;
+        }
         pt = currentSalary > 15000 ? 200 : 0;
       }
 
@@ -339,10 +355,11 @@ const PayrollController = {
           },
           statutory_deductions: {
             pf: hasCustomStructure ? pf : (pf || Math.round(basic * 0.12)),
-            esi: hasCustomStructure ? esi : (esi || (currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0)),
+            esi: basic <= 15000 ? (hasCustomStructure ? esi : (esi || (currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0))) : 0,
+            mediclaim: basic > 15000 ? (hasCustomStructure ? mediclaim : (mediclaim || (currentSalary > 25000 ? 750 : 500))) : 0,
             pt: hasCustomStructure ? pt : (pt || 200),
             others: 0,
-            total_statutory: (hasCustomStructure ? pf : (pf || Math.round(basic * 0.12))) + (hasCustomStructure ? esi : (esi || 0)) + (hasCustomStructure ? pt : (pt || 200)),
+            total_statutory: (hasCustomStructure ? pf : (pf || Math.round(basic * 0.12))) + (basic <= 15000 ? (hasCustomStructure ? esi : (esi || 0)) : (hasCustomStructure ? mediclaim : (mediclaim || 0))) + (hasCustomStructure ? pt : (pt || 200)),
           },
         },
         latest_salary_structure: {
@@ -354,7 +371,8 @@ const PayrollController = {
           medical,
           total_fixed: basic + da + hra + allowance + conveyance + medical,
           pf: hasCustomStructure ? pf : (pf || Math.round(basic * 0.12)),
-          esi: hasCustomStructure ? esi : (esi || (currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0)),
+          esi: basic <= 15000 ? (hasCustomStructure ? esi : (esi || (currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0))) : 0,
+          mediclaim: basic > 15000 ? (hasCustomStructure ? mediclaim : (mediclaim || (currentSalary > 25000 ? 750 : 500))) : 0,
           pt: hasCustomStructure ? pt : (pt || 200),
           tds: tds || 0,
           it: it || 0,

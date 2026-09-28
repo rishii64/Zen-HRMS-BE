@@ -34,6 +34,8 @@ const EmployeeController = {
         id: user.id,
         name: user.name,
         email: user.email,
+        work_email: user.work_email || user.email,
+        personal_email: user.personal_email || "",
         employee_code: user.employee_id,
         job_role: user.role,
         status: user.status || (user.is_active ? "Active" : "Inactive"),
@@ -47,9 +49,19 @@ const EmployeeController = {
         tabs_enabled: user.tabs_enabled,
         enabled_tabs: user.enabled_tabs,
         document_status: user.document_status || "Not Uploaded",
+        pan_no: user.pan_no || "",
+        aadhaar_no: user.aadhaar_no || "",
+        driving_license: user.driving_license || "",
         doc_resume: user.doc_resume,
         doc_id: user.doc_id,
         doc_cert: user.doc_cert,
+        doc_pan: user.doc_pan,
+        doc_aadhaar: user.doc_aadhaar,
+        doc_payslips: user.doc_payslips,
+        doc_exp_cert: user.doc_exp_cert,
+        doc_last_company: user.doc_last_company,
+        uploaded_documents: user.uploaded_documents,
+        last_company_details: user.last_company_details,
         profile_photo: user.profile_photo,
         profile_pic: user.profile_photo,
         salary_structure: user.salary_structure
@@ -69,6 +81,12 @@ const EmployeeController = {
         employee_code,
         name,
         email,
+        work_email,
+        personal_email,
+        pan_no,
+        aadhaar_no,
+        request_documents,
+        document_status,
         password,
         job_role,
         status,
@@ -83,12 +101,17 @@ const EmployeeController = {
         enabled_tabs
       } = req.body;
 
-      if (!employee_code || !name || !email || !dept || !designation || !current_salary || !joining_date || !reporting_manager || !phone_no) {
-        return res.status(400).json({ error: "All fields are required" });
-      }
+      const primaryEmail = (work_email || email || "").toLowerCase().trim();
+      const normalizedPersonalEmail = personal_email ? personal_email.toLowerCase().trim() : null;
+      const normalizedWorkEmail = primaryEmail;
+      const normalizedEmployeeCode = employee_code ? employee_code.trim() : "";
+      const normalizedPanNo = pan_no ? pan_no.toUpperCase().trim() : null;
+      const normalizedAadhaarNo = aadhaar_no ? aadhaar_no.trim() : null;
+      const docStatus = document_status || (request_documents ? "Pending Upload" : "Not Uploaded");
 
-      const normalizedEmail = email.toLowerCase().trim();
-      const normalizedEmployeeCode = employee_code.trim();
+      if (!normalizedEmployeeCode || !name || !primaryEmail || !dept || !designation || !current_salary || !joining_date || !reporting_manager || !phone_no) {
+        return res.status(400).json({ error: "All required fields must be filled (including Work Email)" });
+      }
 
       // Check if employee code or email already exists
       const existingUserByCode = await User.findOne({
@@ -104,11 +127,11 @@ const EmployeeController = {
       const existingUserByEmail = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("email")),
-          normalizedEmail
+          primaryEmail
         )
       });
       if (existingUserByEmail) {
-        return res.status(400).json({ error: "Email is already registered" });
+        return res.status(400).json({ error: "Work email is already registered" });
       }
 
       const defaultPassword = password || "User@123";
@@ -127,7 +150,12 @@ const EmployeeController = {
       const newUser = await User.create({
         employee_id: normalizedEmployeeCode,
         name: name.trim(),
-        email: normalizedEmail,
+        email: primaryEmail,
+        work_email: normalizedWorkEmail,
+        personal_email: normalizedPersonalEmail,
+        pan_no: normalizedPanNo,
+        aadhaar_no: normalizedAadhaarNo,
+        document_status: docStatus,
         password: passwordHash,
         role: job_role ? job_role.toLowerCase().trim() : "employee",
         is_active: isActive,
@@ -153,7 +181,12 @@ const EmployeeController = {
           employee_id: normalizedEmployeeCode,
           first_name: firstName,
           last_name: lastName,
-          email: normalizedEmail,
+          email: primaryEmail,
+          work_email: normalizedWorkEmail,
+          personal_email: normalizedPersonalEmail,
+          pan_no: normalizedPanNo,
+          aadhaar_no: normalizedAadhaarNo,
+          document_status: docStatus,
           status: status || "Active",
           job_role: job_role || "employee",
           dept: dept ? dept.trim() : null,
@@ -170,11 +203,11 @@ const EmployeeController = {
         console.error("Failed to create employee profile in employees table:", err.message);
       }
 
-      // Send welcome email with login credentials
+      // Send welcome email with login credentials to work email
       let emailSent = false;
       let emailError = null;
       try {
-        await sendCredentialsEmail(normalizedEmail, name.trim(), normalizedEmployeeCode, defaultPassword);
+        await sendCredentialsEmail(primaryEmail, name.trim(), normalizedEmployeeCode, defaultPassword);
         emailSent = true;
       } catch (mailErr) {
         emailError = mailErr.message;
@@ -184,7 +217,7 @@ const EmployeeController = {
       return res.status(201).json({
         success: true,
         message: emailSent
-          ? `Employee added successfully! Login credentials with Employee Code (${normalizedEmployeeCode}) have been sent to ${normalizedEmail}.`
+          ? `Employee added successfully! Login credentials with Employee Code (${normalizedEmployeeCode}) have been sent to ${primaryEmail}.`
           : `Employee added successfully. (Note: Email delivery failed: ${emailError || "Check SMTP settings"}). Please share Employee Code: ${normalizedEmployeeCode} with the user.`,
         email_sent: emailSent,
         employee: {
@@ -192,6 +225,11 @@ const EmployeeController = {
           employee_code: newUser.employee_id,
           name: newUser.name,
           email: newUser.email,
+          work_email: newUser.work_email,
+          personal_email: newUser.personal_email,
+          pan_no: newUser.pan_no,
+          aadhaar_no: newUser.aadhaar_no,
+          document_status: newUser.document_status,
           job_role: newUser.role,
           tabs_enabled: newUser.tabs_enabled,
           enabled_tabs: newUser.enabled_tabs
@@ -210,6 +248,12 @@ const EmployeeController = {
         employee_code,
         name,
         email,
+        work_email,
+        personal_email,
+        pan_no,
+        aadhaar_no,
+        request_documents,
+        document_status,
         job_role,
         status,
         current_salary,
@@ -223,8 +267,11 @@ const EmployeeController = {
         enabled_tabs
       } = req.body;
 
-      if (!employee_code || !name || !email || !dept || !designation || !current_salary || !joining_date || !reporting_manager || !phone_no) {
-        return res.status(400).json({ error: "All fields are required" });
+      const primaryEmail = (work_email || email || "").toLowerCase().trim();
+      const normalizedPersonalEmail = personal_email !== undefined ? (personal_email ? personal_email.toLowerCase().trim() : null) : undefined;
+
+      if (!employee_code || !name || !primaryEmail || !dept || !designation || !current_salary || !joining_date || !reporting_manager || !phone_no) {
+        return res.status(400).json({ error: "All required fields must be filled (including Work Email)" });
       }
 
       const user = await User.findOne({
@@ -247,11 +294,13 @@ const EmployeeController = {
       }
 
       const isActive = status === "Active";
-      const normalizedEmail = email ? email.toLowerCase().trim() : null;
 
       const userUpdateFields = {
         name: name.trim(),
-        ...(normalizedEmail ? { email: normalizedEmail } : {}),
+        ...(primaryEmail ? { email: primaryEmail, work_email: primaryEmail } : {}),
+        ...(normalizedPersonalEmail !== undefined ? { personal_email: normalizedPersonalEmail } : {}),
+        ...(pan_no !== undefined ? { pan_no: pan_no ? pan_no.toUpperCase().trim() : null } : {}),
+        ...(aadhaar_no !== undefined ? { aadhaar_no: aadhaar_no ? aadhaar_no.trim() : null } : {}),
         role: job_role ? job_role.toLowerCase().trim() : "employee",
         is_active: isActive,
         status: status || (isActive ? "Active" : "Inactive"),
@@ -263,6 +312,12 @@ const EmployeeController = {
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
       };
+
+      if (document_status !== undefined) {
+        userUpdateFields.document_status = document_status;
+      } else if (request_documents && (!user.document_status || user.document_status === "Not Uploaded")) {
+        userUpdateFields.document_status = "Pending Upload";
+      }
 
       if (tabs_enabled !== undefined) {
         userUpdateFields.tabs_enabled = tabs_enabled === true || tabs_enabled === "true";
@@ -289,7 +344,12 @@ const EmployeeController = {
         const empDefaults = {
           first_name: firstName,
           last_name: lastName,
-          email: normalizedEmail || user.email,
+          email: primaryEmail || user.email,
+          work_email: primaryEmail || user.work_email || user.email,
+          personal_email: normalizedPersonalEmail !== undefined ? normalizedPersonalEmail : user.personal_email,
+          pan_no: userUpdateFields.pan_no !== undefined ? userUpdateFields.pan_no : user.pan_no,
+          aadhaar_no: userUpdateFields.aadhaar_no !== undefined ? userUpdateFields.aadhaar_no : user.aadhaar_no,
+          document_status: userUpdateFields.document_status !== undefined ? userUpdateFields.document_status : user.document_status,
           status: status || "Active",
           job_role: job_role || "employee",
           dept: dept ? dept.trim() : null,
@@ -312,7 +372,11 @@ const EmployeeController = {
           const empUpdateFields = {
             first_name: firstName,
             last_name: lastName,
-            ...(normalizedEmail ? { email: normalizedEmail } : {}),
+            ...(primaryEmail ? { email: primaryEmail, work_email: primaryEmail } : {}),
+            ...(normalizedPersonalEmail !== undefined ? { personal_email: normalizedPersonalEmail } : {}),
+            ...(userUpdateFields.pan_no !== undefined ? { pan_no: userUpdateFields.pan_no } : {}),
+            ...(userUpdateFields.aadhaar_no !== undefined ? { aadhaar_no: userUpdateFields.aadhaar_no } : {}),
+            ...(userUpdateFields.document_status !== undefined ? { document_status: userUpdateFields.document_status } : {}),
             status: status || "Active",
             job_role: job_role || "employee",
             dept: dept ? dept.trim() : null,
@@ -549,6 +613,8 @@ const EmployeeController = {
         name: user.name,
         first_name: user.name,
         email: user.email,
+        work_email: user.work_email || user.email,
+        personal_email: user.personal_email || "",
         employee_id: user.employee_id,
         role: user.role,
         is_active: user.is_active,
@@ -588,7 +654,17 @@ const EmployeeController = {
         last_working_date: resignation?.last_working_date || relievingDate,
         resignation_status: resignation?.status || (isResigned ? "Resigned" : null),
         marital_status: user.marital_status,
-        document_status: user.document_status || "Not Uploaded"
+        document_status: user.document_status || "Not Uploaded",
+        pan_no: user.pan_no || "",
+        aadhaar_no: user.aadhaar_no || "",
+        driving_license: user.driving_license || "",
+        doc_pan: user.doc_pan,
+        doc_aadhaar: user.doc_aadhaar,
+        doc_payslips: user.doc_payslips,
+        doc_exp_cert: user.doc_exp_cert,
+        doc_last_company: user.doc_last_company,
+        uploaded_documents: user.uploaded_documents,
+        last_company_details: user.last_company_details
       };
 
       return res.json({ success: true, employee, data: employee });
@@ -607,6 +683,7 @@ const EmployeeController = {
         dob,
         gender,
         nationality,
+        personal_email,
         address_current,
         address_permanent,
         emergency_contact_name,
@@ -620,7 +697,11 @@ const EmployeeController = {
         religion,
         total_experience,
         previous_experience,
-        marital_status
+        marital_status,
+        pan_no,
+        aadhaar_no,
+        driving_license,
+        last_company_details
       } = req.body;
 
       const user = await User.findOne({
@@ -634,11 +715,108 @@ const EmployeeController = {
         return res.status(404).json({ success: false, error: "Employee not found" });
       }
 
-      const files = req.files || {};
-      const doc_resume = files.doc_resume ? files.doc_resume[0].filename : null;
-      const doc_id = files.doc_id ? files.doc_id[0].filename : null;
-      const doc_cert = files.doc_cert ? files.doc_cert[0].filename : null;
-      const profile_photo = files.profile_photo ? files.profile_photo[0].filename : null;
+      // Group incoming files by fieldname (supports upload.any() array or upload.fields() object)
+      let filesList = [];
+      if (Array.isArray(req.files)) {
+        filesList = req.files;
+      } else if (req.files && typeof req.files === "object") {
+        Object.values(req.files).forEach((arr) => {
+          if (Array.isArray(arr)) filesList.push(...arr);
+        });
+      }
+      const filesByField = {};
+      filesList.forEach((f) => {
+        if (!filesByField[f.fieldname]) filesByField[f.fieldname] = [];
+        filesByField[f.fieldname].push(f);
+      });
+
+      const doc_resume = filesByField.doc_resume ? filesByField.doc_resume[0].filename : null;
+      const doc_id = filesByField.doc_id ? filesByField.doc_id[0].filename : null;
+      const doc_cert = filesByField.doc_cert ? filesByField.doc_cert[0].filename : null;
+      const profile_photo = filesByField.profile_photo ? filesByField.profile_photo[0].filename : null;
+      const doc_pan = filesByField.doc_pan ? filesByField.doc_pan[0].filename : null;
+      const doc_aadhaar = filesByField.doc_aadhaar ? filesByField.doc_aadhaar[0].filename : null;
+
+      // Handle multiple file uploads for payslips, experience certificates, last company docs
+      const payslipsArr = filesByField.doc_payslips ? filesByField.doc_payslips.map(f => ({
+        filename: f.filename,
+        originalname: f.originalname,
+        size: f.size,
+        uploaded_at: new Date().toISOString()
+      })) : null;
+
+      const expCertArr = filesByField.doc_exp_cert ? filesByField.doc_exp_cert.map(f => ({
+        filename: f.filename,
+        originalname: f.originalname,
+        size: f.size,
+        uploaded_at: new Date().toISOString()
+      })) : null;
+
+      const lastCompanyArr = filesByField.doc_last_company ? filesByField.doc_last_company.map(f => ({
+        filename: f.filename,
+        originalname: f.originalname,
+        size: f.size,
+        uploaded_at: new Date().toISOString()
+      })) : null;
+
+      const genericDocsArr = filesByField.uploaded_documents ? filesByField.uploaded_documents.map(f => ({
+        filename: f.filename,
+        originalname: f.originalname,
+        size: f.size,
+        uploaded_at: new Date().toISOString()
+      })) : null;
+
+      let updatedPayslips = user.doc_payslips;
+      if (req.body.doc_payslips && typeof req.body.doc_payslips === 'string' && req.body.doc_payslips.startsWith('[')) {
+        updatedPayslips = req.body.doc_payslips;
+      } else if (payslipsArr && payslipsArr.length > 0) {
+        try {
+          const prev = user.doc_payslips ? JSON.parse(user.doc_payslips) : [];
+          const combined = Array.isArray(prev) ? [...prev, ...payslipsArr] : payslipsArr;
+          updatedPayslips = JSON.stringify(combined);
+        } catch {
+          updatedPayslips = JSON.stringify(payslipsArr);
+        }
+      }
+
+      let updatedExpCert = user.doc_exp_cert;
+      if (req.body.doc_exp_cert && typeof req.body.doc_exp_cert === 'string' && req.body.doc_exp_cert.startsWith('[')) {
+        updatedExpCert = req.body.doc_exp_cert;
+      } else if (expCertArr && expCertArr.length > 0) {
+        try {
+          const prev = user.doc_exp_cert ? JSON.parse(user.doc_exp_cert) : [];
+          const combined = Array.isArray(prev) ? [...prev, ...expCertArr] : expCertArr;
+          updatedExpCert = JSON.stringify(combined);
+        } catch {
+          updatedExpCert = JSON.stringify(expCertArr);
+        }
+      }
+
+      let updatedLastCompanyDocs = user.doc_last_company;
+      if (req.body.doc_last_company && typeof req.body.doc_last_company === 'string' && req.body.doc_last_company.startsWith('[')) {
+        updatedLastCompanyDocs = req.body.doc_last_company;
+      } else if (lastCompanyArr && lastCompanyArr.length > 0) {
+        try {
+          const prev = user.doc_last_company ? JSON.parse(user.doc_last_company) : [];
+          const combined = Array.isArray(prev) ? [...prev, ...lastCompanyArr] : lastCompanyArr;
+          updatedLastCompanyDocs = JSON.stringify(combined);
+        } catch {
+          updatedLastCompanyDocs = JSON.stringify(lastCompanyArr);
+        }
+      }
+
+      let updatedUploadedDocs = user.uploaded_documents;
+      if (req.body.uploaded_documents && typeof req.body.uploaded_documents === 'string' && req.body.uploaded_documents.startsWith('[')) {
+        updatedUploadedDocs = req.body.uploaded_documents;
+      } else if (genericDocsArr && genericDocsArr.length > 0) {
+        try {
+          const prev = user.uploaded_documents ? JSON.parse(user.uploaded_documents) : [];
+          const combined = Array.isArray(prev) ? [...prev, ...genericDocsArr] : genericDocsArr;
+          updatedUploadedDocs = JSON.stringify(combined);
+        } catch {
+          updatedUploadedDocs = JSON.stringify(genericDocsArr);
+        }
+      }
 
       const updateData = {
         dob: dob || user.dob,
@@ -660,15 +838,34 @@ const EmployeeController = {
         marital_status: marital_status || user.marital_status
       };
 
+      if (pan_no !== undefined) updateData.pan_no = pan_no ? pan_no.toUpperCase().trim() : null;
+      if (aadhaar_no !== undefined) updateData.aadhaar_no = aadhaar_no ? aadhaar_no.trim() : null;
+      if (driving_license !== undefined) updateData.driving_license = driving_license ? driving_license.trim() : null;
+      if (last_company_details !== undefined) updateData.last_company_details = last_company_details;
+
+      if (personal_email !== undefined) {
+        updateData.personal_email = personal_email ? personal_email.toLowerCase().trim() : null;
+      }
+
       if (doc_resume) updateData.doc_resume = doc_resume;
       if (doc_id) updateData.doc_id = doc_id;
       if (doc_cert) updateData.doc_cert = doc_cert;
       if (profile_photo) updateData.profile_photo = profile_photo;
+      if (doc_pan) updateData.doc_pan = doc_pan;
+      if (doc_aadhaar) updateData.doc_aadhaar = doc_aadhaar;
+      if (updatedPayslips !== undefined) updateData.doc_payslips = updatedPayslips;
+      if (updatedExpCert !== undefined) updateData.doc_exp_cert = updatedExpCert;
+      if (updatedLastCompanyDocs !== undefined) updateData.doc_last_company = updatedLastCompanyDocs;
+      if (updatedUploadedDocs !== undefined) updateData.uploaded_documents = updatedUploadedDocs;
 
       let currentStatus = user.document_status || "Not Uploaded";
-      if (doc_resume || doc_id || doc_cert) {
+      const hasAnyNewDoc = doc_resume || doc_id || doc_cert || doc_pan || doc_aadhaar ||
+        (payslipsArr && payslipsArr.length) || (expCertArr && expCertArr.length) ||
+        (lastCompanyArr && lastCompanyArr.length) || (genericDocsArr && genericDocsArr.length);
+
+      if (hasAnyNewDoc) {
         currentStatus = "Pending Verification";
-      } else if (currentStatus === "Not Uploaded" && (user.doc_resume || user.doc_id || user.doc_cert)) {
+      } else if (currentStatus === "Not Uploaded" && (user.doc_resume || user.doc_id || user.doc_cert || user.doc_pan || user.doc_aadhaar)) {
         currentStatus = "Pending Verification";
       }
       updateData.document_status = currentStatus;
@@ -699,10 +896,22 @@ const EmployeeController = {
           employee_id: user.employee_id,
           name: user.name,
           email: user.email,
+          work_email: user.work_email,
+          personal_email: user.personal_email,
           designation: user.designation,
           dept: user.dept,
           profile_photo: user.profile_photo,
-          document_status: user.document_status
+          document_status: user.document_status,
+          pan_no: user.pan_no,
+          aadhaar_no: user.aadhaar_no,
+          driving_license: user.driving_license,
+          last_company_details: user.last_company_details,
+          doc_pan: user.doc_pan,
+          doc_aadhaar: user.doc_aadhaar,
+          doc_payslips: user.doc_payslips,
+          doc_exp_cert: user.doc_exp_cert,
+          doc_last_company: user.doc_last_company,
+          uploaded_documents: user.uploaded_documents
         }
       });
     } catch (err) {
@@ -800,6 +1009,7 @@ const EmployeeController = {
       let income_tax = 0;
       let pf = 0;
       let esi = 0;
+      let mediclaim = 0;
       let tds = 0;
       let lop = 0;
 
@@ -817,13 +1027,22 @@ const EmployeeController = {
         income_tax = parseFloat(d.income_tax) || 0;
         pf = parseFloat(d.pf) || 0;
         esi = parseFloat(d.esi) || 0;
+        mediclaim = parseFloat(d.mediclaim) || 0;
         tds = parseFloat(d.tds) || 0;
         lop = parseFloat(d.lop) || 0;
+
+        if (basic > 15000) {
+          if (!mediclaim && esi) mediclaim = esi;
+          esi = 0;
+        } else {
+          if (!esi && mediclaim) esi = mediclaim;
+          mediclaim = 0;
+        }
       } else {
         // Standard default breakdown based on currentSalary
         if (currentSalary > 0) {
-          basic = Math.round(currentSalary * 0.40);
-          da = Math.round(currentSalary * 0.10);
+          basic = Math.round(currentSalary * 0.45);
+          da = 0;
           hra = Math.round(currentSalary * 0.40);
           conveyance = Math.round(currentSalary * 0.05) || 1600;
           medical = Math.round(currentSalary * 0.05) || 1250;
@@ -831,7 +1050,13 @@ const EmployeeController = {
           allowance = Math.max(0, currentSalary - assigned);
 
           pf = Math.round(basic * 0.12);
-          esi = currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0;
+          if (basic <= 15000) {
+            esi = currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0;
+            mediclaim = 0;
+          } else {
+            esi = 0;
+            mediclaim = currentSalary > 25000 ? 750 : 500;
+          }
           professional_tax = currentSalary > 15000 ? 200 : 0;
           income_tax = 0;
           tds = 0;
@@ -840,7 +1065,7 @@ const EmployeeController = {
       }
 
       const gross_salary = basic + da + hra + allowance + conveyance + medical;
-      const total_deductions = professional_tax + income_tax + pf + esi + tds + lop;
+      const total_deductions = professional_tax + income_tax + pf + (basic <= 15000 ? esi : mediclaim) + tds + lop;
       const net_salary = Math.max(0, gross_salary - total_deductions);
 
       return res.json({
@@ -861,7 +1086,8 @@ const EmployeeController = {
             professional_tax,
             income_tax,
             pf,
-            esi,
+            esi: basic <= 15000 ? esi : 0,
+            mediclaim: basic > 15000 ? mediclaim : 0,
             tds,
             lop
           },
@@ -913,6 +1139,7 @@ const EmployeeController = {
         income_tax = 0,
         pf = 0,
         esi = 0,
+        mediclaim = 0,
         tds = 0,
         lop = 0
       } = req.body;
@@ -927,12 +1154,23 @@ const EmployeeController = {
       const numPT = Math.max(0, parseFloat(professional_tax) || 0);
       const numIT = Math.max(0, parseFloat(income_tax) || 0);
       const numPf = Math.max(0, parseFloat(pf) || 0);
-      const numEsi = Math.max(0, parseFloat(esi) || 0);
+
+      // Map ESI if basic <= 15000; Map Mediclaim if basic > 15000
+      let numEsi = 0;
+      let numMediclaim = 0;
+      if (numBasic <= 15000) {
+        numEsi = Math.max(0, parseFloat(esi || mediclaim) || 0);
+        numMediclaim = 0;
+      } else {
+        numMediclaim = Math.max(0, parseFloat(mediclaim || esi) || 0);
+        numEsi = 0;
+      }
+
       const numTds = Math.max(0, parseFloat(tds) || 0);
       const numLop = Math.max(0, parseFloat(lop) || 0);
 
       const gross_salary = numBasic + numDa + numHra + numAllowance + numConveyance + numMedical;
-      const total_deductions = numPT + numIT + numPf + numEsi + numTds + numLop;
+      const total_deductions = numPT + numIT + numPf + numEsi + numMediclaim + numTds + numLop;
       const net_salary = Math.max(0, gross_salary - total_deductions);
 
       const structureData = {
@@ -949,6 +1187,7 @@ const EmployeeController = {
           income_tax: numIT,
           pf: numPf,
           esi: numEsi,
+          mediclaim: numMediclaim,
           tds: numTds,
           lop: numLop
         },

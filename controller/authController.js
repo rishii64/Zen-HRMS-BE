@@ -54,6 +54,7 @@ const AuthController = {
       const newUser = await User.create({
         name: name.trim(),
         email: normalizedEmail,
+        work_email: normalizedEmail,
         password: passwordHash,
         role: normalizedRole,
         employee_id: code,
@@ -83,6 +84,7 @@ const AuthController = {
             first_name: firstName,
             last_name: lastName,
             email: normalizedEmail,
+            work_email: normalizedEmail,
             status: "Active",
             job_role: "employee"
           });

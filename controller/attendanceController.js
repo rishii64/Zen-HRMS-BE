@@ -1,7 +1,7 @@
 const { Attendance, User, Employee, Schedule, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 const { getISTParts, getISTDateStr, getISTTimeStr } = require("../utils/timezone");
-const { autoClockOutExpiredAttendance } = require("../services/autoClockOutService");
+const { autoClockOutExpiredAttendance, clockOutOnPortalLogout } = require("../services/autoClockOutService");
 
 const getTodayDateStr = () => {
   return getISTDateStr();
@@ -140,7 +140,8 @@ const AttendanceController = {
       let dateCondition;
 
       if (range === "week") {
-        const d = new Date(`${istNow.dateStr}T12:00:00+05:30`);
+        const baseDate = (date && typeof date === "string" && !isNaN(new Date(date).getTime())) ? date : istNow.dateStr;
+        const d = new Date(`${baseDate}T12:00:00+05:30`);
         const dayOfWeek = d.getDay();
         const start = new Date(d);
         start.setDate(d.getDate() - dayOfWeek);
@@ -150,15 +151,31 @@ const AttendanceController = {
           [Op.between]: [getISTDateStr(start), getISTDateStr(end)]
         };
       } else if (range === "month") {
-        const startStr = `${istNow.year}-${String(istNow.month).padStart(2, "0")}-01`;
-        const lastDay = new Date(istNow.year, istNow.month, 0).getDate();
-        const endStr = `${istNow.year}-${String(istNow.month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+        let targetYear = istNow.year;
+        let targetMonth = istNow.month;
+        if (date && typeof date === "string" && date.includes("-")) {
+          const parts = date.split("-");
+          const y = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10);
+          if (!isNaN(y) && !isNaN(m) && m >= 1 && m <= 12) {
+            targetYear = y;
+            targetMonth = m;
+          }
+        }
+        const startStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+        const lastDay = new Date(targetYear, targetMonth, 0).getDate();
+        const endStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
         dateCondition = {
           [Op.between]: [startStr, endStr]
         };
       } else if (range === "year") {
-        const startStr = `${istNow.year}-01-01`;
-        const endStr = `${istNow.year}-12-31`;
+        let targetYear = istNow.year;
+        if (date && typeof date === "string" && date.includes("-")) {
+          const y = parseInt(date.split("-")[0], 10);
+          if (!isNaN(y) && y > 2000) targetYear = y;
+        }
+        const startStr = `${targetYear}-01-01`;
+        const endStr = `${targetYear}-12-31`;
         dateCondition = {
           [Op.between]: [startStr, endStr]
         };
@@ -173,7 +190,8 @@ const AttendanceController = {
       // Enforce visibility rules
       if (scope === "my" || emp_id) {
         // Specifically requested personal/target attendance logs
-        const targetEmpId = (emp_id && (role === "hr" || role === "admin")) ? emp_id : employee_id;
+        const isSupervisor = role === "hr" || role === "admin" || role === "hrmanager" || role === "hod" || role === "manager" || role === "teamlead";
+        const targetEmpId = (emp_id && isSupervisor) ? emp_id : employee_id;
         whereClause.employee_id = { [Op.iLike]: targetEmpId.trim() };
       } else if (role === "hr" || role === "admin" || role === "hrmanager") {
         // HR/Admin can see all, with optional filter by dept
@@ -191,7 +209,7 @@ const AttendanceController = {
         whereClause.employee_id = { [Op.iLike]: employee_id.trim() };
       }
 
-      // Automatically finalize any unclosed attendance logs past assigned shift & 14hr session
+      // Automatically finalize any unclosed attendance logs past 14hr session threshold
       await autoClockOutExpiredAttendance().catch((e) =>
         console.warn("[getAttendance Auto Clock-Out Check Warning]:", e.message)
       );
@@ -278,6 +296,7 @@ const AttendanceController = {
           if (matchedProfile?.dept && (!plain.dept || plain.dept === "General")) {
             plain.dept = matchedProfile.dept;
           }
+          plain.notes = plain.notes !== undefined ? plain.notes : (r.notes || null);
           return plain;
         });
       } catch (enrichErr) {
@@ -296,7 +315,7 @@ const AttendanceController = {
     try {
       const { employee_id } = req.user;
 
-      // Automatically clock-out if assigned shift ended and 14hr session threshold elapsed
+      // Automatically clock-out if 14hr session threshold elapsed
       await autoClockOutExpiredAttendance({ employee_id }).catch((e) =>
         console.warn("[getTodayStatus Auto Clock-Out Warning]:", e.message)
       );
@@ -504,9 +523,18 @@ const AttendanceController = {
       const resolvedName = name || (targetUser ? targetUser.name : "Employee");
       const resolvedDept = dept || (targetUser ? targetUser.dept : "General");
 
-      let record = await Attendance.findOne({
-        where: { employee_id, date }
-      });
+      let record = null;
+      if (req.body.id) {
+        record = await Attendance.findByPk(req.body.id);
+      }
+      if (!record) {
+        record = await Attendance.findOne({
+          where: {
+            employee_id: { [Op.iLike]: employee_id.trim() },
+            date,
+          },
+        });
+      }
 
       if (record) {
         await record.update({
@@ -515,12 +543,12 @@ const AttendanceController = {
           check_in: check_in || record.check_in,
           check_out: check_out || record.check_out,
           status,
-          notes: notes || record.notes,
+          notes: notes !== undefined ? notes : record.notes,
           work_hours: work_hours || record.work_hours,
         });
       } else {
         record = await Attendance.create({
-          employee_id,
+          employee_id: employee_id.trim(),
           name: resolvedName,
           dept: resolvedDept,
           date,
@@ -528,7 +556,7 @@ const AttendanceController = {
           check_out: check_out || null,
           status,
           notes: notes || null,
-          work_hours: work_hours || 0
+          work_hours: work_hours || 0,
         });
       }
 
@@ -547,11 +575,12 @@ const AttendanceController = {
   async autoClockOut(req, res) {
     try {
       const { employee_id } = req.user;
-      const { forceIfShiftEnded } = req.body || {};
+      const { forceIfSessionExpired, forceIfShiftEnded } = req.body || {};
 
       const result = await autoClockOutExpiredAttendance({
         employee_id,
-        forceIfShiftEnded: forceIfShiftEnded !== undefined ? forceIfShiftEnded : true,
+        forceIfSessionExpired: forceIfSessionExpired !== undefined ? forceIfSessionExpired : true,
+        forceIfShiftEnded,
       });
 
       return res.json({
@@ -564,6 +593,25 @@ const AttendanceController = {
     } catch (err) {
       console.error("Auto clock-out error:", err.message);
       return res.status(500).json({ error: "Failed to perform automatic clock-out" });
+    }
+  },
+
+  // POST /api/auth/attendance/portal-logout
+  async portalLogout(req, res) {
+    try {
+      const { employee_id } = req.user;
+      const result = await clockOutOnPortalLogout({ employee_id });
+
+      return res.json({
+        success: true,
+        message: result.clockedOut
+          ? `Clocked out at ${result.check_out} on portal logout.`
+          : "Portal logout processed cleanly.",
+        ...result,
+      });
+    } catch (err) {
+      console.error("Portal logout clock-out error:", err.message);
+      return res.status(500).json({ error: "Failed to process portal logout clock-out" });
     }
   },
 };

@@ -32,6 +32,9 @@ const Payroll = require("../model/payrollModel")(sequelize);
 const ITDeclaration = require("../model/itDeclarationModel")(sequelize);
 const MediclaimPolicy = require("../model/mediclaimModel")(sequelize);
 const MediclaimClaim = require("../model/mediclaimClaimModel")(sequelize);
+const KpiTemplate = require("../model/kpiTemplateModel")(sequelize);
+const KpiAssignment = require("../model/kpiAssignmentModel")(sequelize);
+const KpiGoalItem = require("../model/kpiGoalItemModel")(sequelize);
 
 // Model Associations
 
@@ -221,6 +224,44 @@ MediclaimClaim.belongsTo(Employee, {
   as: "employee",
 });
 
+// 11. Employee & User <-> KpiAssignment <-> KpiGoalItem
+Employee.hasMany(KpiAssignment, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "kpiAssignments",
+});
+KpiAssignment.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employeeProfile",
+});
+
+User.hasMany(KpiAssignment, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "kpiAssignments",
+});
+KpiAssignment.belongsTo(User, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+KpiAssignment.belongsTo(User, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "user",
+});
+
+KpiAssignment.hasMany(KpiGoalItem, {
+  foreignKey: "assignment_id",
+  as: "goals",
+  onDelete: "CASCADE",
+});
+KpiGoalItem.belongsTo(KpiAssignment, {
+  foreignKey: "assignment_id",
+  as: "assignment",
+});
+
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
@@ -247,4 +288,7 @@ module.exports = {
   ITDeclaration,
   MediclaimPolicy,
   MediclaimClaim,
+  KpiTemplate,
+  KpiAssignment,
+  KpiGoalItem,
 };
