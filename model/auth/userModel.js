@@ -78,6 +78,12 @@ module.exports = (sequelize) => {
         allowNull: true,
       },
 
+      weekly_off: {
+        type: DataTypes.STRING(20),
+        allowNull: true,
+        defaultValue: "Sunday", // Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Rotational
+      },
+
       joining_date: {
         type: DataTypes.DATEONLY,
         allowNull: true,

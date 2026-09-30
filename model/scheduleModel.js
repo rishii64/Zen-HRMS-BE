@@ -64,6 +64,12 @@ module.exports = (sequelize) => {
         defaultValue: "Published",
       },
 
+      is_rotational_off: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
       created_by: {
         type: DataTypes.STRING(100),
         allowNull: true,

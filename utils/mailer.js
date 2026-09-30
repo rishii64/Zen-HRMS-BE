@@ -129,4 +129,156 @@ Zentelex HRMS`,
   await transporter.sendMail(mailOptions);
 };
 
-module.exports = { sendOTPEmail, sendCredentialsEmail };
+const sendInterviewScheduleEmail = async ({
+  candidateName,
+  candidateEmail,
+  position,
+  department,
+  requisitionCode,
+  interviewRound,
+  interviewDate,
+  interviewTime,
+  interviewMode,
+  meetingLink,
+  interviewNotes,
+  hrName,
+  hrEmail,
+  hodName,
+  hodEmail,
+}) => {
+  const roundLabels = {
+    SCHEDULED: "Interview Scheduled",
+    ROUND_1_HR: "Round 1 — HR Screening",
+    ROUND_2_TECH: "Round 2 — Technical (HOD)",
+    ROUND_3_FINAL: "Round 3 — Final Round",
+    INTERVIEW_REQUESTED: "Interview Requested",
+  };
+  const stageName = roundLabels[interviewRound] || interviewRound || "Interview Session";
+
+  const isValidEmail = (e) =>
+    typeof e === "string" && e.trim().includes("@") && e.trim().includes(".");
+
+  const toRecipients = [];
+  const ccRecipients = [];
+
+  if (isValidEmail(candidateEmail)) {
+    toRecipients.push(candidateEmail.trim().toLowerCase());
+  }
+
+  if (isValidEmail(hrEmail)) {
+    const cleanHr = hrEmail.trim().toLowerCase();
+    if (!toRecipients.includes(cleanHr)) {
+      ccRecipients.push(cleanHr);
+    }
+  }
+
+  if (isValidEmail(hodEmail)) {
+    const cleanHod = hodEmail.trim().toLowerCase();
+    if (!toRecipients.includes(cleanHod) && !ccRecipients.includes(cleanHod)) {
+      ccRecipients.push(cleanHod);
+    }
+  }
+
+  // If candidate email wasn't provided, send directly to HR and HOD
+  if (toRecipients.length === 0) {
+    if (ccRecipients.length > 0) {
+      toRecipients.push(...ccRecipients);
+      ccRecipients.length = 0;
+    } else {
+      console.warn("sendInterviewScheduleEmail: No valid email addresses found.");
+      return { success: false, reason: "No valid email recipients" };
+    }
+  }
+
+  const isOnlineLink =
+    meetingLink &&
+    (meetingLink.startsWith("http://") || meetingLink.startsWith("https://"));
+
+  const mailOptions = {
+    from: `"Zentelex Recruitment" <${process.env.SMTP_MAIL}>`,
+    to: toRecipients.join(", "),
+    cc: ccRecipients.length > 0 ? ccRecipients.join(", ") : undefined,
+    subject: `Interview Invitation: ${position} — ${candidateName} (${stageName})`,
+    html: `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 650px; margin: auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background-color: #ffffff; color: #0f172a;">
+        <div style="text-align: center; padding-bottom: 18px; border-bottom: 2px solid #f1f5f9;">
+          <h2 style="color: #1e3a8a; margin: 0 0 6px; font-size: 22px; font-weight: 700;">Interview Scheduled</h2>
+          <p style="color: #64748b; font-size: 13px; margin: 0;">Zentelex HRMS Recruitment Portal</p>
+        </div>
+
+        <div style="padding: 20px 0;">
+          <p style="font-size: 15px; margin: 0 0 12px; color: #334155;">
+            Dear <strong>${candidateName}</strong>,
+          </p>
+          <p style="font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 18px;">
+            Your interview for the position of <strong>${position}</strong> has been officially scheduled. Please review the complete meeting details below:
+          </p>
+
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 10px; padding: 18px 20px; margin: 18px 0;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <tr>
+                <td style="padding: 7px 0; color: #64748b; width: 160px; font-weight: 500;">Position:</td>
+                <td style="padding: 7px 0; color: #0f172a; font-weight: 700;">${position}</td>
+              </tr>
+              <tr>
+                <td style="padding: 7px 0; color: #64748b; font-weight: 500;">Interview Stage:</td>
+                <td style="padding: 7px 0; color: #0f172a; font-weight: 700;">${stageName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 7px 0; color: #64748b; font-weight: 500;">Interview Date:</td>
+                <td style="padding: 7px 0; color: #0f172a; font-weight: 700;">${interviewDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 7px 0; color: #64748b; font-weight: 500;">Interview Time:</td>
+                <td style="padding: 7px 0; color: #1e3a8a; font-weight: 700;">${interviewTime || "11:00 AM"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 7px 0; color: #64748b; font-weight: 500;">Meeting Mode:</td>
+                <td style="padding: 7px 0; color: #0f172a; font-weight: 600;">${interviewMode || "Online"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 7px 0; color: #64748b; font-weight: 500;">Meeting Link:</td>
+                <td style="padding: 7px 0;">
+                  ${isOnlineLink
+        ? `<a href="${meetingLink}" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: 600; word-break: break-all;">${meetingLink}</a>`
+        : `<strong style="color: #0f172a;">${meetingLink || "Will be shared by the organizer"}</strong>`
+      }
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          ${isOnlineLink
+        ? `
+            <div style="text-align: center; margin: 24px 0 16px;">
+              <a href="${meetingLink}" target="_blank" style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; display: inline-block; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);">
+                Join Interview Meeting
+              </a>
+            </div>
+          `
+        : ""
+      }
+
+          <div style="background-color: #eff6ff; border-left: 2px solid #3b82f6; padding: 12px 16px; border-radius: 6px; margin: 18px 0; font-size: 10px; color: #1e40af; line-height: 1.5;">
+            <strong>Preparation Advice:</strong> Please join the session 5 minutes prior to the scheduled time. Ensure a stable internet connection, operational webcam, and quiet environment.
+          </div>
+
+          <p style="font-size: 13px; color: #64748b; margin: 18px 0 0;">
+            Warm regards,<br />
+            <strong>HR Recruitment Team</strong><br />
+            Zentelex HRMS
+          </p>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0 14px;" />
+        <div style="text-align: center; font-size: 11px; color: #94a3b8;">
+          &copy; 2026 Zentelex HRMS • Recruitment & Talent Acquisition
+        </div>
+      </div>
+    `,
+  };
+
+  return await transporter.sendMail(mailOptions);
+};
+
+module.exports = { sendOTPEmail, sendCredentialsEmail, sendInterviewScheduleEmail };

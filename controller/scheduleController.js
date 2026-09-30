@@ -44,6 +44,9 @@ const ScheduleController = {
       if (date) {
         whereClause.date = date;
       }
+      if (req.query.from && req.query.to) {
+        whereClause.date = { [Op.between]: [req.query.from, req.query.to] };
+      }
 
       const schedules = await Schedule.findAll({
         where: whereClause,
@@ -51,7 +54,7 @@ const ScheduleController = {
           {
             model: User,
             as: "user",
-            attributes: ["id", "name", "email", "role", "dept", "designation"]
+            attributes: ["id", "name", "email", "role", "dept", "designation", "weekly_off"]
           }
         ],
         order: [["date", "ASC"], ["employee_id", "ASC"]]
@@ -111,6 +114,10 @@ const ScheduleController = {
       const resolvedName = name || targetUser.name;
       const resolvedDesignation = designation || targetUser.designation || "Staff";
 
+      const isOff = (shift_name || "").toLowerCase().includes("off");
+      const resolvedStartTime = isOff ? "—" : (start_time || "10:00");
+      const resolvedEndTime = isOff ? "—" : (end_time || "19:00");
+
       // Find or create schedule for employee + date
       let schedule = await Schedule.findOne({
         where: {
@@ -125,10 +132,11 @@ const ScheduleController = {
           dept: resolvedDept,
           designation: resolvedDesignation,
           shift_name,
-          start_time: start_time || "10:00",
-          end_time: end_time || "19:00",
+          start_time: resolvedStartTime,
+          end_time: resolvedEndTime,
           week_start: week_start || null,
-          created_by: creator.name || creatorId,
+          is_rotational_off: isOff,
+          created_by: creator?.name || creatorId,
           notes: notes || null
         });
       } else {
@@ -138,12 +146,13 @@ const ScheduleController = {
           dept: resolvedDept,
           designation: resolvedDesignation,
           shift_name,
-          start_time: start_time || "10:00",
-          end_time: end_time || "19:00",
+          start_time: resolvedStartTime,
+          end_time: resolvedEndTime,
           date,
           week_start: week_start || null,
           status: "Published",
-          created_by: creator.name || creatorId,
+          is_rotational_off: isOff,
+          created_by: creator?.name || creatorId,
           notes: notes || null
         });
       }
@@ -156,6 +165,161 @@ const ScheduleController = {
     } catch (err) {
       console.error("Create schedule error:", err.message);
       return res.status(500).json({ error: "Failed to save shift schedule" });
+    }
+  },
+
+  // POST /api/auth/schedule/assign-rotational
+  async assignRotationalWeekOff(req, res) {
+    try {
+      const { role, employee_id: creatorId } = req.user;
+      const {
+        employee_ids,
+        rotational_off_day,
+        shift_name = "General Shift",
+        start_time = "10:00",
+        end_time = "19:00",
+        start_date,
+        end_date,
+        set_as_default = true,
+        notes = "Rotational Week Off"
+      } = req.body;
+
+      const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
+      const isHodOrManager = role === "hod" || role === "manager";
+
+      if (!isHrOrAdmin && !isHodOrManager) {
+        return res.status(403).json({ error: "Only HOD, HR, or Admin can assign rotational schedules" });
+      }
+
+      if (!rotational_off_day || !start_date || !end_date) {
+        return res.status(400).json({ error: "Rotational off day, start date, and end date are required" });
+      }
+
+      const creator = await User.findOne({ where: { employee_id: creatorId } });
+      const creatorDept = creator ? (creator.dept || "General") : "General";
+
+      // 1. Resolve target employees
+      let targetEmpCodes = Array.isArray(employee_ids) ? employee_ids : (employee_ids ? [employee_ids] : []);
+      let targetUsers = [];
+
+      if (targetEmpCodes.length === 0 || targetEmpCodes.includes("all")) {
+        let userWhere = {};
+        if (!isHrOrAdmin) {
+          userWhere.dept = { [Op.iLike]: creatorDept.trim() };
+        }
+        targetUsers = await User.findAll({ where: userWhere });
+      } else {
+        targetUsers = await User.findAll({
+          where: {
+            employee_id: { [Op.in]: targetEmpCodes }
+          }
+        });
+      }
+
+      if (targetUsers.length === 0) {
+        return res.status(404).json({ error: "No matching employees found for rotational schedule assignment" });
+      }
+
+      // Check department boundary if HOD
+      if (isHodOrManager && !isHrOrAdmin) {
+        const outsideDept = targetUsers.some(
+          (u) => u.dept && u.dept.toLowerCase() !== creatorDept.toLowerCase()
+        );
+        if (outsideDept) {
+          return res.status(403).json({ error: "HOD can only assign rotational schedules within their department" });
+        }
+      }
+
+      // 2. Prepare date range & day mapping
+      const targetOffDay = rotational_off_day.trim().toLowerCase();
+      const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+      const datesToProcess = [];
+      const cur = new Date(start_date + "T12:00:00+05:30");
+      const endD = new Date(end_date + "T12:00:00+05:30");
+
+      while (cur <= endD) {
+        const dStr = cur.toISOString().split("T")[0];
+        const dayOfWeekIndex = cur.getDay();
+        const dayOfWeekName = dayNames[dayOfWeekIndex];
+        datesToProcess.push({
+          dateStr: dStr,
+          dayName: dayOfWeekName,
+          isRotationalOff: dayOfWeekName === targetOffDay
+        });
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      let totalUpdated = 0;
+
+      for (const u of targetUsers) {
+        // Map to Employee and User tables: update default weekly_off
+        if (set_as_default) {
+          await User.update(
+            { weekly_off: rotational_off_day },
+            { where: { employee_id: u.employee_id } }
+          );
+          await Employee.update(
+            { weekly_off: rotational_off_day },
+            { where: { employee_id: u.employee_id } }
+          );
+        }
+
+        // Upsert schedule records for each date in the period
+        for (const item of datesToProcess) {
+          const shiftForDay = item.isRotationalOff ? "Week Off" : (shift_name || "General Shift");
+          const sTime = item.isRotationalOff ? "—" : (start_time || "10:00");
+          const eTime = item.isRotationalOff ? "—" : (end_time || "19:00");
+          const dayNotes = item.isRotationalOff ? (notes || "Rotational Week Off") : null;
+
+          let sched = await Schedule.findOne({
+            where: {
+              employee_id: u.employee_id,
+              date: item.dateStr
+            }
+          });
+
+          if (sched) {
+            await sched.update({
+              name: u.name,
+              dept: u.dept || "General",
+              designation: u.designation || "Staff",
+              shift_name: shiftForDay,
+              start_time: sTime,
+              end_time: eTime,
+              is_rotational_off: item.isRotationalOff,
+              created_by: creator?.name || creatorId,
+              notes: dayNotes
+            });
+          } else {
+            await Schedule.create({
+              employee_id: u.employee_id,
+              name: u.name,
+              dept: u.dept || "General",
+              designation: u.designation || "Staff",
+              shift_name: shiftForDay,
+              start_time: sTime,
+              end_time: eTime,
+              date: item.dateStr,
+              status: "Published",
+              is_rotational_off: item.isRotationalOff,
+              created_by: creator?.name || creatorId,
+              notes: dayNotes
+            });
+          }
+          totalUpdated++;
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Successfully assigned rotational week-off (${rotational_off_day}) for ${targetUsers.length} employee(s) across ${datesToProcess.length} days`,
+        employees_updated: targetUsers.length,
+        schedules_count: totalUpdated
+      });
+    } catch (err) {
+      console.error("Assign rotational schedule error:", err.message);
+      return res.status(500).json({ error: "Failed to assign rotational schedule" });
     }
   },
 

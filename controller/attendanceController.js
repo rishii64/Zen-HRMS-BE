@@ -1,7 +1,6 @@
 const { Attendance, User, Employee, Schedule, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 const { getISTParts, getISTDateStr, getISTTimeStr } = require("../utils/timezone");
-const { autoClockOutExpiredAttendance, clockOutOnPortalLogout } = require("../services/autoClockOutService");
 
 const getTodayDateStr = () => {
   return getISTDateStr();
@@ -138,8 +137,16 @@ const AttendanceController = {
       const istNow = getISTParts();
       const todayStr = istNow.dateStr;
       let dateCondition;
+      let startDateStr = todayStr;
+      let endDateStr = todayStr;
 
-      if (range === "week") {
+      if (req.query.from && req.query.to) {
+        startDateStr = req.query.from;
+        endDateStr = req.query.to;
+        dateCondition = {
+          [Op.between]: [startDateStr, endDateStr]
+        };
+      } else if (range === "week") {
         const baseDate = (date && typeof date === "string" && !isNaN(new Date(date).getTime())) ? date : istNow.dateStr;
         const d = new Date(`${baseDate}T12:00:00+05:30`);
         const dayOfWeek = d.getDay();
@@ -147,8 +154,10 @@ const AttendanceController = {
         start.setDate(d.getDate() - dayOfWeek);
         const end = new Date(start);
         end.setDate(start.getDate() + 6);
+        startDateStr = getISTDateStr(start);
+        endDateStr = getISTDateStr(end);
         dateCondition = {
-          [Op.between]: [getISTDateStr(start), getISTDateStr(end)]
+          [Op.between]: [startDateStr, endDateStr]
         };
       } else if (range === "month") {
         let targetYear = istNow.year;
@@ -162,11 +171,11 @@ const AttendanceController = {
             targetMonth = m;
           }
         }
-        const startStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+        startDateStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
         const lastDay = new Date(targetYear, targetMonth, 0).getDate();
-        const endStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+        endDateStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
         dateCondition = {
-          [Op.between]: [startStr, endStr]
+          [Op.between]: [startDateStr, endDateStr]
         };
       } else if (range === "year") {
         let targetYear = istNow.year;
@@ -174,12 +183,18 @@ const AttendanceController = {
           const y = parseInt(date.split("-")[0], 10);
           if (!isNaN(y) && y > 2000) targetYear = y;
         }
-        const startStr = `${targetYear}-01-01`;
-        const endStr = `${targetYear}-12-31`;
+        startDateStr = `${targetYear}-01-01`;
+        endDateStr = `${targetYear}-12-31`;
         dateCondition = {
-          [Op.between]: [startStr, endStr]
+          [Op.between]: [startDateStr, endDateStr]
         };
+      } else if (range === "day") {
+        startDateStr = date || todayStr;
+        endDateStr = date || todayStr;
+        dateCondition = date || todayStr;
       } else {
+        startDateStr = date || todayStr;
+        endDateStr = date || todayStr;
         dateCondition = date || todayStr;
       }
 
@@ -188,31 +203,32 @@ const AttendanceController = {
       };
 
       // Enforce visibility rules
+      let empWhere = { status: { [Op.ne]: "Terminated" } };
+
       if (scope === "my" || emp_id) {
         // Specifically requested personal/target attendance logs
         const isSupervisor = role === "hr" || role === "admin" || role === "hrmanager" || role === "hod" || role === "manager" || role === "teamlead";
         const targetEmpId = (emp_id && isSupervisor) ? emp_id : employee_id;
         whereClause.employee_id = { [Op.iLike]: targetEmpId.trim() };
+        empWhere.employee_id = { [Op.iLike]: targetEmpId.trim() };
       } else if (role === "hr" || role === "admin" || role === "hrmanager") {
         // HR/Admin can see all, with optional filter by dept
         if (dept && dept !== "All") {
           whereClause.dept = { [Op.iLike]: dept.trim() };
+          empWhere.dept = { [Op.iLike]: dept.trim() };
         }
       } else if (role === "hod" || role === "accounts" || role === "manager" || role === "payroll") {
         // HOD/Accounts/Manager see department logs only
         const filterDept = (dept && dept !== "All") ? dept : (resolvedDept && resolvedDept !== "Other" && resolvedDept !== "General" ? resolvedDept : null);
         if (filterDept) {
           whereClause.dept = { [Op.iLike]: filterDept.trim() };
+          empWhere.dept = { [Op.iLike]: filterDept.trim() };
         }
       } else {
         // Employees can only view their own attendance log history
         whereClause.employee_id = { [Op.iLike]: employee_id.trim() };
+        empWhere.employee_id = { [Op.iLike]: employee_id.trim() };
       }
-
-      // Automatically finalize any unclosed attendance logs past 14hr session threshold
-      await autoClockOutExpiredAttendance().catch((e) =>
-        console.warn("[getAttendance Auto Clock-Out Check Warning]:", e.message)
-      );
 
       const records = await Attendance.findAll({
         where: whereClause,
@@ -221,72 +237,70 @@ const AttendanceController = {
 
       // Enrich records with shift information from Schedule table and employee profile details
       let enrichedRecords = records;
+      let synthesizedRecords = [];
+
       try {
-        const dates = [...new Set(records.map(r => r.date).filter(Boolean))];
-        const empIds = [...new Set(records.map(r => (r.employee_id || "").trim()).filter(Boolean))];
+        // 1. Fetch all employees in scope
+        const activeEmployees = await Employee.findAll({
+          where: empWhere,
+          attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date"]
+        });
 
-        let scheduleMap = {};
-        if (dates.length > 0) {
-          const schedules = await Schedule.findAll({
-            where: {
-              date: { [Op.in]: dates }
-            }
-          });
-          schedules.forEach(s => {
-            const key = `${(s.employee_id || "").toLowerCase().trim()}_${s.date}`;
-            scheduleMap[key] = s;
-          });
-        }
+        const activeUsers = await User.findAll({
+          where: empWhere,
+          attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off"]
+        });
 
-        // Fetch User and Employee profiles for accurate designation and profile photo
-        let profileMap = {};
-        if (empIds.length > 0) {
-          const users = await User.findAll({
-            where: {
-              employee_id: { [Op.in]: empIds }
-            },
-            attributes: ["employee_id", "designation", "dept", "profile_photo"]
+        const employeeCatalog = new Map();
+        activeEmployees.forEach(e => {
+          const key = (e.employee_id || "").toLowerCase().trim();
+          const fullName = `${e.first_name || ""} ${e.last_name || ""}`.trim() || e.employee_id;
+          employeeCatalog.set(key, {
+            employee_id: e.employee_id,
+            name: fullName,
+            dept: e.dept || "General",
+            designation: e.designation || "Staff",
+            profile_photo: e.profile_photo || null,
+            weekly_off: e.weekly_off || "Sunday",
+            joining_date: e.joining_date || null
           });
-          users.forEach(u => {
-            const key = (u.employee_id || "").toLowerCase().trim();
-            profileMap[key] = {
-              designation: u.designation,
-              dept: u.dept,
-              profile_photo: u.profile_photo
-            };
-          });
+        });
 
-          const employees = await Employee.findAll({
-            where: {
-              employee_id: { [Op.in]: empIds }
-            },
-            attributes: ["employee_id", "designation", "dept", "profile_photo"]
-          });
-          employees.forEach(e => {
-            const key = (e.employee_id || "").toLowerCase().trim();
-            if (!profileMap[key]) {
-              profileMap[key] = {
-                designation: e.designation,
-                dept: e.dept,
-                profile_photo: e.profile_photo
-              };
-            } else {
-              if (!profileMap[key].designation && e.designation) {
-                profileMap[key].designation = e.designation;
-              }
-              if (!profileMap[key].profile_photo && e.profile_photo) {
-                profileMap[key].profile_photo = e.profile_photo;
-              }
-            }
-          });
-        }
+        activeUsers.forEach(u => {
+          const key = (u.employee_id || "").toLowerCase().trim();
+          if (!employeeCatalog.has(key)) {
+            employeeCatalog.set(key, {
+              employee_id: u.employee_id,
+              name: u.name,
+              dept: u.dept || "General",
+              designation: u.designation || "Staff",
+              profile_photo: u.profile_photo || null,
+              weekly_off: u.weekly_off || "Sunday",
+              joining_date: null
+            });
+          }
+        });
 
+        // 2. Fetch all schedules in this date window
+        const schedules = await Schedule.findAll({
+          where: {
+            date: { [Op.between]: [startDateStr, endDateStr] }
+          }
+        });
+
+        const scheduleMap = {};
+        schedules.forEach(s => {
+          const key = `${(s.employee_id || "").toLowerCase().trim()}_${s.date}`;
+          scheduleMap[key] = s;
+        });
+
+        // 3. Enrich existing punched records
         enrichedRecords = records.map(r => {
           const plain = r.toJSON ? r.toJSON() : { ...r };
           const eKey = (plain.employee_id || "").toLowerCase().trim();
           const sKey = `${eKey}_${plain.date}`;
           const matchedSchedule = scheduleMap[sKey];
-          const matchedProfile = profileMap[eKey];
+          const matchedProfile = employeeCatalog.get(eKey);
 
           plain.shift_name = matchedSchedule?.shift_name || "General Shift";
           plain.shift_start = matchedSchedule?.start_time || "10:00";
@@ -299,11 +313,113 @@ const AttendanceController = {
           plain.notes = plain.notes !== undefined ? plain.notes : (r.notes || null);
           return plain;
         });
+
+        // 4. Synthesize absent, week-off and roster days for all dates in range
+        const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+        const dateList = [];
+        const curD = new Date(startDateStr + "T12:00:00+05:30");
+        const maxD = new Date(endDateStr + "T12:00:00+05:30");
+
+        while (curD <= maxD) {
+          dateList.push(getISTDateStr(curD));
+          curD.setDate(curD.getDate() + 1);
+        }
+
+        const existingAttendanceMap = new Set();
+        records.forEach(r => {
+          const k = `${(r.employee_id || "").toLowerCase().trim()}_${r.date}`;
+          existingAttendanceMap.add(k);
+        });
+
+        for (const [eKey, emp] of employeeCatalog.entries()) {
+          for (const dStr of dateList) {
+            const mapKey = `${eKey}_${dStr}`;
+            if (existingAttendanceMap.has(mapKey)) {
+              continue; // employee has actual punch record
+            }
+
+            if (emp.joining_date && dStr < emp.joining_date) {
+              continue; // don't synthesize absents prior to joining date
+            }
+
+            const matchedSchedule = scheduleMap[mapKey];
+            const dObj = new Date(dStr + "T12:00:00+05:30");
+            const dayName = dayNames[dObj.getDay()];
+            const empWeeklyOff = (emp.weekly_off || "Sunday").toLowerCase().trim();
+            const isFuture = dStr > todayStr;
+
+            let status = isFuture ? "Scheduled" : "Absent";
+            let shiftName = "General Shift";
+            let shiftStart = "10:00";
+            let shiftEnd = "19:00";
+            let notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
+
+            if (matchedSchedule) {
+              shiftName = matchedSchedule.shift_name || "General Shift";
+              shiftStart = matchedSchedule.start_time || "10:00";
+              shiftEnd = matchedSchedule.end_time || "19:00";
+
+              if (shiftName.toLowerCase().includes("off")) {
+                status = "Week Off";
+                shiftStart = "—";
+                shiftEnd = "—";
+                notes = matchedSchedule.notes || "Scheduled Rotational Week Off";
+              } else {
+                status = isFuture ? "Scheduled" : "Absent";
+                notes = matchedSchedule.notes || (isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)");
+              }
+            } else {
+              // Check employee's weekly_off setting
+              if (dayName === empWeeklyOff) {
+                status = "Week Off";
+                shiftName = "Week Off";
+                shiftStart = "—";
+                shiftEnd = "—";
+                notes = "Weekly Off";
+              } else {
+                status = isFuture ? "Scheduled" : "Absent";
+                shiftName = "General Shift";
+                shiftStart = "10:00";
+                shiftEnd = "19:00";
+                notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
+              }
+            }
+
+            synthesizedRecords.push({
+              id: `syn-${emp.employee_id}-${dStr}`,
+              employee_id: emp.employee_id,
+              name: emp.name,
+              dept: emp.dept,
+              designation: emp.designation,
+              profile_photo: emp.profile_photo,
+              date: dStr,
+              check_in: null,
+              check_out: null,
+              work_hours: 0,
+              late_count: 0,
+              status,
+              shift_name: shiftName,
+              shift_start: shiftStart,
+              shift_end: shiftEnd,
+              notes,
+              is_synthesized: true
+            });
+          }
+        }
       } catch (enrichErr) {
         console.warn("Could not enrich attendance with schedules and profiles:", enrichErr.message);
       }
 
-      return res.json({ success: true, data: enrichedRecords });
+      // Combine real logs and synthesized records, ordered by date descending
+      const combinedRecords = [...enrichedRecords, ...synthesizedRecords].sort((a, b) => {
+        if (a.date !== b.date) {
+          return b.date.localeCompare(a.date);
+        }
+        return (a.employee_id || "").localeCompare(b.employee_id || "");
+      });
+
+      return res.json({ success: true, data: combinedRecords });
     } catch (err) {
       console.error("Get attendance error:", err.message);
       return res.status(500).json({ error: "Failed to retrieve attendance records" });
@@ -314,11 +430,6 @@ const AttendanceController = {
   async getTodayStatus(req, res) {
     try {
       const { employee_id } = req.user;
-
-      // Automatically clock-out if 14hr session threshold elapsed
-      await autoClockOutExpiredAttendance({ employee_id }).catch((e) =>
-        console.warn("[getTodayStatus Auto Clock-Out Warning]:", e.message)
-      );
 
       const istNow = getISTParts();
       const today = istNow.dateStr;
@@ -571,48 +682,22 @@ const AttendanceController = {
     }
   },
 
-  // POST /api/auth/attendance/auto-clock-out
+  // POST /api/auth/attendance/auto-clock-out (Feature disabled)
   async autoClockOut(req, res) {
-    try {
-      const { employee_id } = req.user;
-      const { forceIfSessionExpired, forceIfShiftEnded } = req.body || {};
-
-      const result = await autoClockOutExpiredAttendance({
-        employee_id,
-        forceIfSessionExpired: forceIfSessionExpired !== undefined ? forceIfSessionExpired : true,
-        forceIfShiftEnded,
-      });
-
-      return res.json({
-        success: true,
-        message: result.updatedCount > 0
-          ? "Employee automatically clocked out successfully."
-          : "No unclosed shift pending clock-out.",
-        ...result,
-      });
-    } catch (err) {
-      console.error("Auto clock-out error:", err.message);
-      return res.status(500).json({ error: "Failed to perform automatic clock-out" });
-    }
+    return res.json({
+      success: true,
+      updatedCount: 0,
+      message: "Auto clock-out feature has been disabled.",
+    });
   },
 
-  // POST /api/auth/attendance/portal-logout
+  // POST /api/auth/attendance/portal-logout (Feature disabled - logout no longer clocks out)
   async portalLogout(req, res) {
-    try {
-      const { employee_id } = req.user;
-      const result = await clockOutOnPortalLogout({ employee_id });
-
-      return res.json({
-        success: true,
-        message: result.clockedOut
-          ? `Clocked out at ${result.check_out} on portal logout.`
-          : "Portal logout processed cleanly.",
-        ...result,
-      });
-    } catch (err) {
-      console.error("Portal logout clock-out error:", err.message);
-      return res.status(500).json({ error: "Failed to process portal logout clock-out" });
-    }
+    return res.json({
+      success: true,
+      clockedOut: false,
+      message: "Portal logout processed cleanly.",
+    });
   },
 };
 

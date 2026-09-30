@@ -37,9 +37,6 @@ app.post("/api/salary/:code", EmployeeController.updateSalaryStructure);
 db.connectDB()
   .then(() => {
     console.log("Database connected...");
-    // Initialize automated clock-out worker for expired sessions past assigned shift end
-    const { initAutoClockOutJob } = require("./services/autoClockOutService");
-    initAutoClockOutJob();
   })
   .catch((err) => console.log("Error: " + err));
 

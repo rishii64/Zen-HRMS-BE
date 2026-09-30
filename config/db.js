@@ -35,6 +35,9 @@ const MediclaimClaim = require("../model/mediclaimClaimModel")(sequelize);
 const KpiTemplate = require("../model/kpiTemplateModel")(sequelize);
 const KpiAssignment = require("../model/kpiAssignmentModel")(sequelize);
 const KpiGoalItem = require("../model/kpiGoalItemModel")(sequelize);
+const RecruitmentRequisition = require("../model/recruitmentRequisitionModel")(sequelize);
+const RecruitmentCandidate = require("../model/recruitmentCandidateModel")(sequelize);
+const Onboarding = require("../model/onboardingModel")(sequelize);
 
 // Model Associations
 
@@ -262,6 +265,39 @@ KpiGoalItem.belongsTo(KpiAssignment, {
   as: "assignment",
 });
 
+// 12. RecruitmentRequisition <-> RecruitmentCandidate
+RecruitmentRequisition.hasMany(RecruitmentCandidate, {
+  foreignKey: "requisition_id",
+  as: "candidates",
+  onDelete: "CASCADE",
+});
+RecruitmentCandidate.belongsTo(RecruitmentRequisition, {
+  foreignKey: "requisition_id",
+  as: "requisition",
+});
+
+// 13. RecruitmentCandidate <-> Onboarding & Employee <-> Onboarding
+RecruitmentCandidate.hasOne(Onboarding, {
+  foreignKey: "candidate_id",
+  as: "onboarding",
+  onDelete: "SET NULL",
+});
+Onboarding.belongsTo(RecruitmentCandidate, {
+  foreignKey: "candidate_id",
+  as: "candidate",
+});
+
+Employee.hasOne(Onboarding, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "onboarding",
+});
+Onboarding.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
@@ -291,4 +327,7 @@ module.exports = {
   KpiTemplate,
   KpiAssignment,
   KpiGoalItem,
+  RecruitmentRequisition,
+  RecruitmentCandidate,
+  Onboarding,
 };

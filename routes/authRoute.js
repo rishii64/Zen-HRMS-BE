@@ -10,6 +10,8 @@ const PayrollController = require("../controller/payrollController");
 const ITDeclarationController = require("../controller/itDeclarationController");
 const MediclaimController = require("../controller/mediclaimController");
 const KpiController = require("../controller/kpiController");
+const RecruitmentController = require("../controller/recruitmentController");
+const OnboardingController = require("../controller/onboardingController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -72,6 +74,7 @@ router.post("/attendance/mark", authenticate, AttendanceController.markManualAtt
 // Work Schedule & Shift Planning routes
 router.get("/schedule", authenticate, ScheduleController.getSchedule);
 router.post("/schedule/create", authenticate, ScheduleController.createSchedule);
+router.post("/schedule/assign-rotational", authenticate, ScheduleController.assignRotationalWeekOff);
 router.post("/schedule/bulk-upload", authenticate, ScheduleController.bulkUploadSchedule);
 router.delete("/schedule/:id", authenticate, ScheduleController.deleteSchedule);
 
@@ -163,4 +166,65 @@ router.post("/kpi/team-reviews/:id/evaluate", authenticate, authorizeRoles("hod"
 router.get("/kpi/all-cycles", authenticate, authorizeRoles("hr", "admin"), KpiController.getAllCompanyKpis);
 router.post("/kpi/calibrate/:id", authenticate, authorizeRoles("hr", "admin"), KpiController.calibrateAndApprove);
 
+// ==========================================
+// Recruitment & Hiring Process Routes
+// ==========================================
+
+// Requisition Management (HOD / HR / Admin)
+router.post("/recruitment/requisitions", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), upload.single("approval_document"), RecruitmentController.createRequisition);
+router.get("/recruitment/requisitions", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getRequisitions);
+router.get("/recruitment/requisitions/:id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getRequisitionById);
+router.put("/recruitment/requisitions/:id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.updateRequisition);
+
+// CEO / COO Approval for Unbudgeted Recruitment
+router.post("/recruitment/requisitions/:id/request-approval", authenticate, authorizeRoles("hr", "admin", "hod", "hrmanager"), RecruitmentController.requestCeoApproval);
+router.post("/recruitment/requisitions/:id/approve-budget", authenticate, authorizeRoles("ceo", "coo", "admin", "hr", "hrmanager"), RecruitmentController.approveRejectBudget);
+
+// Candidate Resume Listing (HR)
+router.post("/recruitment/candidates", authenticate, authorizeRoles("hr", "admin", "hrmanager"), upload.single("resume"), RecruitmentController.addCandidate);
+router.get("/recruitment/candidates", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getCandidates);
+router.get("/recruitment/candidates/:candidate_id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getCandidateById);
+router.post("/recruitment/candidates/:candidate_id/evaluation", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "hrmanager"), RecruitmentController.submitCandidateEvaluation);
+router.patch("/recruitment/candidates/:candidate_id/stage", authenticate, authorizeRoles("hr", "admin", "hrmanager"), RecruitmentController.updateInterviewStage);
+router.delete("/recruitment/candidates/:candidate_id", authenticate, authorizeRoles("hr", "admin", "hrmanager"), RecruitmentController.deleteCandidate);
+
+// HOD Candidate Selection & Interview Request
+router.post("/recruitment/candidates/:candidate_id/hod-action", authenticate, authorizeRoles("hod", "hr", "admin", "manager"), RecruitmentController.hodCandidateAction);
+
+// Recruitment Dashboard Metrics
+router.get("/recruitment/stats", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getRecruitmentStats);
+
+// ==========================================
+// Onboarding Process Routes
+// a) Joining (email, id card, biometric, laptop, bag, stationery)
+// b) Documentation process
+// c) Intro & Training (HR, Admin, POS, Dept)
+// d) Department Assignment (after dept training)
+// e) 6-Month Probation Review & HOD Permanent / Reject Decision
+// ==========================================
+
+// Pipeline listing & stats
+router.get("/onboarding/stats", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "ceo", "coo"), OnboardingController.getOnboardingStats);
+router.get("/onboarding/my", authenticate, OnboardingController.getMyOnboarding);
+router.get("/onboarding", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "ceo", "coo"), OnboardingController.getAllOnboardings);
+router.get("/onboarding/:id", authenticate, OnboardingController.getOnboardingById);
+router.post("/onboarding/initiate", authenticate, authorizeRoles("hr", "admin"), OnboardingController.initiateOnboarding);
+
+// Stage A: Joining & Asset Issuance
+router.patch("/onboarding/:id/joining-assets", authenticate, authorizeRoles("hr", "admin"), OnboardingController.updateJoiningAssets);
+
+// Stage B: Documentation Process & File Uploads
+router.patch("/onboarding/:id/documentation", authenticate, authorizeRoles("hr", "admin"), OnboardingController.updateDocumentation);
+router.post("/onboarding/:id/documentation/upload", authenticate, upload.single("doc_file"), OnboardingController.uploadDocumentFile);
+
+// Stage C: Intro & 4-Stage Training Modules (HR, Admin, POS, Dept)
+router.patch("/onboarding/:id/training", authenticate, authorizeRoles("hr", "admin", "hod", "manager"), OnboardingController.updateTrainingModule);
+
+// Stage D: Department Assignment (Unlocked after Dept Training)
+router.patch("/onboarding/:id/assign-department", authenticate, authorizeRoles("hr", "admin", "hod"), OnboardingController.assignDepartment);
+
+// Stage E: 6-Month Probation Review & HOD Permanent / Reject Decision
+router.patch("/onboarding/:id/probation-decision", authenticate, authorizeRoles("hod", "hr", "admin", "manager"), OnboardingController.submitProbationDecision);
+
 module.exports = router;
+
