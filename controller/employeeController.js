@@ -64,6 +64,7 @@ const EmployeeController = {
         last_company_details: user.last_company_details,
         profile_photo: user.profile_photo,
         profile_pic: user.profile_photo,
+        employment_type: user.employment_type || "Permanent",
         salary_structure: user.salary_structure
       }));
 
@@ -167,6 +168,7 @@ const EmployeeController = {
         reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
+        employment_type: req.body.employment_type || "Permanent",
         tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
         enabled_tabs: tabsString || "1,2,3,4"
       });
@@ -196,6 +198,7 @@ const EmployeeController = {
           reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
           phone_no: phone_no ? phone_no.trim() : null,
           kpi: kpi ? kpi.trim() : null,
+          employment_type: req.body.employment_type || "Permanent",
           tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
           enabled_tabs: tabsString || "1,2,3,4"
         });
@@ -311,6 +314,7 @@ const EmployeeController = {
         reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
+        ...(req.body.employment_type !== undefined ? { employment_type: req.body.employment_type } : {}),
       };
 
       if (document_status !== undefined) {
@@ -359,6 +363,7 @@ const EmployeeController = {
           reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
           phone_no: phone_no ? phone_no.trim() : null,
           kpi: kpi ? kpi.trim() : null,
+          employment_type: userUpdateFields.employment_type !== undefined ? userUpdateFields.employment_type : (user.employment_type || "Permanent"),
           tabs_enabled: userUpdateFields.tabs_enabled !== undefined ? userUpdateFields.tabs_enabled : user.tabs_enabled,
           enabled_tabs: userUpdateFields.enabled_tabs !== undefined ? userUpdateFields.enabled_tabs : user.enabled_tabs
         };
@@ -377,6 +382,7 @@ const EmployeeController = {
             ...(userUpdateFields.pan_no !== undefined ? { pan_no: userUpdateFields.pan_no } : {}),
             ...(userUpdateFields.aadhaar_no !== undefined ? { aadhaar_no: userUpdateFields.aadhaar_no } : {}),
             ...(userUpdateFields.document_status !== undefined ? { document_status: userUpdateFields.document_status } : {}),
+            ...(userUpdateFields.employment_type !== undefined ? { employment_type: userUpdateFields.employment_type } : {}),
             status: status || "Active",
             job_role: job_role || "employee",
             dept: dept ? dept.trim() : null,
@@ -1017,7 +1023,6 @@ const EmployeeController = {
         const e = parsedStructure.earnings;
         const d = parsedStructure.deductions || {};
         basic = parseFloat(e.basic) || 0;
-        da = parseFloat(e.da) || 0;
         hra = parseFloat(e.hra) || 0;
         allowance = parseFloat(e.allowance) || 0;
         conveyance = parseFloat(e.conveyance) || 0;
@@ -1031,27 +1036,27 @@ const EmployeeController = {
         tds = parseFloat(d.tds) || 0;
         lop = parseFloat(d.lop) || 0;
 
-        if (basic > 15000) {
-          if (!mediclaim && esi) mediclaim = esi;
-          esi = 0;
-        } else {
+        const totalSalaryCheck = (basic + hra + allowance + conveyance + medical) || currentSalary;
+        if (totalSalaryCheck <= 21000) {
           if (!esi && mediclaim) esi = mediclaim;
           mediclaim = 0;
+        } else {
+          if (!mediclaim && esi) mediclaim = esi;
+          esi = 0;
         }
       } else {
-        // Standard default breakdown based on currentSalary
+        // Standard default breakdown based on currentSalary (DA removed)
         if (currentSalary > 0) {
           basic = Math.round(currentSalary * 0.45);
-          da = 0;
           hra = Math.round(currentSalary * 0.40);
           conveyance = Math.round(currentSalary * 0.05) || 1600;
           medical = Math.round(currentSalary * 0.05) || 1250;
-          const assigned = basic + da + hra + conveyance + medical;
+          const assigned = basic + hra + conveyance + medical;
           allowance = Math.max(0, currentSalary - assigned);
 
           pf = Math.round(basic * 0.12);
-          if (basic <= 15000) {
-            esi = currentSalary <= 21000 ? Math.round(currentSalary * 0.0075) : 0;
+          if (currentSalary <= 21000) {
+            esi = Math.round(currentSalary * 0.0075);
             mediclaim = 0;
           } else {
             esi = 0;
@@ -1064,8 +1069,42 @@ const EmployeeController = {
         }
       }
 
-      const gross_salary = basic + da + hra + allowance + conveyance + medical;
-      const total_deductions = professional_tax + income_tax + pf + (basic <= 15000 ? esi : mediclaim) + tds + lop;
+      // Check Permanent status (Interns and employees under probation are ineligible for Advance, Loan, Insurance, Gratuity)
+      const empType = (user.employment_type || "Permanent").trim();
+      const desig = (user.designation || "").toLowerCase();
+      const userStatus = (user.status || "").toLowerCase();
+      const isIntern = empType.toLowerCase() === "intern" || desig.includes("intern");
+      const isProbation = empType.toLowerCase() === "probation" || desig.includes("trainee") || desig.includes("probation") || userStatus.includes("probation");
+      const isPermanent = !isIntern && !isProbation && (empType.toLowerCase() === "permanent" || userStatus === "active" || userStatus === "fulltime");
+      const employmentType = isPermanent ? "Permanent" : (isIntern ? "Intern" : "Probation");
+
+      // Extract adjustments (Advance Payment, Loan, Insurance) from structure
+      const adj = parsedStructure?.adjustments || {};
+      let advance_amount = isPermanent ? Math.min(100000, Math.max(0, parseFloat(adj.advance_amount) || 0)) : 0;
+      let advance_deduction = isPermanent ? Math.min(advance_amount, Math.max(0, parseFloat(adj.advance_deduction || parsedStructure?.deductions?.advance_deduction) || 0)) : 0;
+      let loan_amount = 0;
+      if (isPermanent && parseFloat(adj.loan_amount) > 0) {
+        loan_amount = Math.min(1000000, Math.max(100000, parseFloat(adj.loan_amount) || 0));
+      }
+      let loan_emi = isPermanent ? Math.max(0, parseFloat(adj.loan_emi || parsedStructure?.deductions?.loan_emi) || 0) : 0;
+      let insurance_deduction = isPermanent ? Math.max(0, parseFloat(adj.insurance_deduction || parsedStructure?.deductions?.insurance) || 0) : 0;
+
+      // Tenure in years based on joining_date for Gratuity
+      let tenure_years = 0;
+      if (user.joining_date) {
+        const joinDate = new Date(user.joining_date);
+        const now = new Date();
+        const diffTime = Math.max(0, now - joinDate);
+        tenure_years = Math.round((diffTime / (1000 * 60 * 60 * 24 * 365.25)) * 10) / 10;
+      }
+
+      // Gratuity calculation (Payment of Gratuity Act, 1972)
+      const gratuity_accrual = isPermanent ? Math.round((basic * 15) / (26 * 12)) : 0;
+      const total_gratuity = isPermanent ? Math.round((15 * basic * tenure_years) / 26) : 0;
+
+      const gross_salary = basic + hra + allowance + conveyance + medical;
+      const isEsiEligible = (gross_salary || currentSalary) <= 21000;
+      const total_deductions = professional_tax + income_tax + pf + (isEsiEligible ? esi : mediclaim) + insurance_deduction + advance_deduction + loan_emi + tds + lop;
       const net_salary = Math.max(0, gross_salary - total_deductions);
 
       return res.json({
@@ -1073,10 +1112,11 @@ const EmployeeController = {
         employee_code: user.employee_id,
         name: user.name,
         current_salary: user.current_salary,
+        employment_type: employmentType,
+        is_permanent: isPermanent,
         salary: {
           earnings: {
             basic,
-            da,
             hra,
             allowance,
             conveyance,
@@ -1086,10 +1126,25 @@ const EmployeeController = {
             professional_tax,
             income_tax,
             pf,
-            esi: basic <= 15000 ? esi : 0,
-            mediclaim: basic > 15000 ? mediclaim : 0,
+            esi: isEsiEligible ? esi : 0,
+            mediclaim: !isEsiEligible ? mediclaim : 0,
+            insurance: insurance_deduction,
+            advance_deduction,
+            loan_emi,
             tds,
             lop
+          },
+          adjustments: {
+            is_permanent: isPermanent,
+            employment_type: employmentType,
+            advance_amount,
+            advance_deduction,
+            loan_amount,
+            loan_emi,
+            insurance_deduction,
+            gratuity_accrual,
+            total_gratuity,
+            tenure_years
           },
           gross_salary,
           total_deductions,
@@ -1129,8 +1184,8 @@ const EmployeeController = {
       }
 
       const {
+        employment_type = "Permanent",
         basic = 0,
-        da = 0,
         hra = 0,
         allowance = 0,
         conveyance = 0,
@@ -1141,11 +1196,15 @@ const EmployeeController = {
         esi = 0,
         mediclaim = 0,
         tds = 0,
-        lop = 0
+        lop = 0,
+        advance_amount = 0,
+        advance_deduction = 0,
+        loan_amount = 0,
+        loan_emi = 0,
+        insurance_deduction = 0
       } = req.body;
 
       const numBasic = Math.max(0, parseFloat(basic) || 0);
-      const numDa = Math.max(0, parseFloat(da) || 0);
       const numHra = Math.max(0, parseFloat(hra) || 0);
       const numAllowance = Math.max(0, parseFloat(allowance) || 0);
       const numConveyance = Math.max(0, parseFloat(conveyance) || 0);
@@ -1155,10 +1214,13 @@ const EmployeeController = {
       const numIT = Math.max(0, parseFloat(income_tax) || 0);
       const numPf = Math.max(0, parseFloat(pf) || 0);
 
-      // Map ESI if basic <= 15000; Map Mediclaim if basic > 15000
+      const gross_salary = numBasic + numHra + numAllowance + numConveyance + numMedical;
+      const isEsiEligible = gross_salary <= 21000;
+
+      // Map ESI if total salary <= 21000; Map Mediclaim if total salary > 21000
       let numEsi = 0;
       let numMediclaim = 0;
-      if (numBasic <= 15000) {
+      if (isEsiEligible) {
         numEsi = Math.max(0, parseFloat(esi || mediclaim) || 0);
         numMediclaim = 0;
       } else {
@@ -1166,17 +1228,40 @@ const EmployeeController = {
         numEsi = 0;
       }
 
+      // Permanent employee policy enforcement
+      const isPermanent = String(employment_type).toLowerCase() === "permanent";
+      const finalEmploymentType = isPermanent ? "Permanent" : (String(employment_type).toLowerCase().includes("intern") ? "Intern" : "Probation");
+
+      // Advance Payment (up to 1 Lakh = 100,000)
+      let numAdvanceAmount = 0;
+      let numAdvanceDeduction = 0;
+      if (isPermanent) {
+        numAdvanceAmount = Math.min(100000, Math.max(0, parseFloat(advance_amount) || 0));
+        numAdvanceDeduction = Math.min(numAdvanceAmount, Math.max(0, parseFloat(advance_deduction) || 0));
+      }
+
+      // Loan (1 to 10 Lakhs = 100,000 to 1,000,000)
+      let numLoanAmount = 0;
+      let numLoanEmi = 0;
+      if (isPermanent && parseFloat(loan_amount) > 0) {
+        numLoanAmount = Math.min(1000000, Math.max(100000, parseFloat(loan_amount) || 0));
+        numLoanEmi = Math.max(0, parseFloat(loan_emi) || 0);
+      }
+
+      // Insurance
+      let numInsurance = isPermanent ? Math.max(0, parseFloat(insurance_deduction) || 0) : 0;
+
       const numTds = Math.max(0, parseFloat(tds) || 0);
       const numLop = Math.max(0, parseFloat(lop) || 0);
 
-      const gross_salary = numBasic + numDa + numHra + numAllowance + numConveyance + numMedical;
-      const total_deductions = numPT + numIT + numPf + numEsi + numMediclaim + numTds + numLop;
+      const total_deductions = numPT + numIT + numPf + numEsi + numMediclaim + numInsurance + numAdvanceDeduction + numLoanEmi + numTds + numLop;
       const net_salary = Math.max(0, gross_salary - total_deductions);
 
       const structureData = {
+        employment_type: finalEmploymentType,
+        is_permanent: isPermanent,
         earnings: {
           basic: numBasic,
-          da: numDa,
           hra: numHra,
           allowance: numAllowance,
           conveyance: numConveyance,
@@ -1188,8 +1273,20 @@ const EmployeeController = {
           pf: numPf,
           esi: numEsi,
           mediclaim: numMediclaim,
+          insurance: numInsurance,
+          advance_deduction: numAdvanceDeduction,
+          loan_emi: numLoanEmi,
           tds: numTds,
           lop: numLop
+        },
+        adjustments: {
+          is_permanent: isPermanent,
+          employment_type: finalEmploymentType,
+          advance_amount: numAdvanceAmount,
+          advance_deduction: numAdvanceDeduction,
+          loan_amount: numLoanAmount,
+          loan_emi: numLoanEmi,
+          insurance_deduction: numInsurance
         },
         gross_salary,
         total_deductions,
@@ -1200,6 +1297,7 @@ const EmployeeController = {
       const structureJson = JSON.stringify(structureData);
 
       await user.update({
+        employment_type: finalEmploymentType,
         salary_structure: structureJson,
         current_salary: gross_salary
       });
@@ -1214,12 +1312,13 @@ const EmployeeController = {
         });
         if (emp) {
           await emp.update({
+            employment_type: finalEmploymentType,
             salary_structure: structureJson,
             current_salary: gross_salary
           });
         }
       } catch (syncErr) {
-        console.warn("Could not sync salary_structure to Employee model:", syncErr.message);
+        console.warn("Employee salary structure sync warning:", syncErr.message);
       }
 
       return res.json({

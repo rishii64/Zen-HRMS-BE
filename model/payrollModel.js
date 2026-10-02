@@ -58,7 +58,13 @@ module.exports = (sequelize) => {
 
       // Statutory Deductions
       statutory_deductions: {
-        type: DataTypes.TEXT, // JSON: { pf, esi, pt, others, total_statutory }
+        type: DataTypes.TEXT, // JSON: { pf, esi, mediclaim, pt, insurance, advance_deduction, loan_emi, others, total_statutory }
+        allowNull: true,
+      },
+
+      // Facilities & Adjustments (Advance Payment, Loan EMI, Insurance, Gratuity)
+      adjustments: {
+        type: DataTypes.TEXT, // JSON: { advance_amount, advance_deduction, loan_amount, loan_emi, insurance_deduction, gratuity_accrual, total_gratuity, is_permanent, employment_type }
         allowNull: true,
       },
 

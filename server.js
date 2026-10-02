@@ -29,6 +29,12 @@ app.get("/", (req, res) => { res.send("Backend working!"); });
 // API Routes
 app.use("/api/auth", authRoutes);
 
+const HolidayController = require("./controller/holidayController");
+app.get("/api/holidays", HolidayController.getHolidays);
+app.post("/api/holidays", HolidayController.addHoliday);
+app.post("/api/holidays/add", HolidayController.addHoliday);
+app.delete("/api/holidays/:id", HolidayController.deleteHoliday);
+
 const EmployeeController = require("./controller/employeeController");
 app.get("/api/salary/:code", EmployeeController.getSalaryStructure);
 app.post("/api/salary/:code", EmployeeController.updateSalaryStructure);

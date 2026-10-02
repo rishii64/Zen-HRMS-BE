@@ -12,6 +12,8 @@ const MediclaimController = require("../controller/mediclaimController");
 const KpiController = require("../controller/kpiController");
 const RecruitmentController = require("../controller/recruitmentController");
 const OnboardingController = require("../controller/onboardingController");
+const HolidayController = require("../controller/holidayController");
+const CelebrationController = require("../controller/celebrationController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -77,6 +79,12 @@ router.post("/schedule/create", authenticate, ScheduleController.createSchedule)
 router.post("/schedule/assign-rotational", authenticate, ScheduleController.assignRotationalWeekOff);
 router.post("/schedule/bulk-upload", authenticate, ScheduleController.bulkUploadSchedule);
 router.delete("/schedule/:id", authenticate, ScheduleController.deleteSchedule);
+
+// Holiday Calendar routes
+router.get("/holidays", HolidayController.getHolidays);
+router.post("/holidays", authenticate, HolidayController.addHoliday);
+router.post("/holidays/add", authenticate, HolidayController.addHoliday);
+router.delete("/holidays/:id", authenticate, HolidayController.deleteHoliday);
 
 // Leave Management routes
 router.get("/leave", authenticate, LeaveController.getLeaves);
@@ -225,6 +233,12 @@ router.patch("/onboarding/:id/assign-department", authenticate, authorizeRoles("
 
 // Stage E: 6-Month Probation Review & HOD Permanent / Reject Decision
 router.patch("/onboarding/:id/probation-decision", authenticate, authorizeRoles("hod", "hr", "admin", "manager"), OnboardingController.submitProbationDecision);
+
+// Company Celebrations: Birthdays & Work Anniversaries
+router.get("/celebrations", CelebrationController.getCelebrations);
+router.post("/celebrations/broadcast", CelebrationController.broadcastCelebration);
+router.get("/celebrations/active-broadcast", CelebrationController.getActiveBroadcast);
+router.post("/celebrations/dismiss-broadcast", CelebrationController.dismissBroadcast);
 
 module.exports = router;
 

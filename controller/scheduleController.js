@@ -1,4 +1,4 @@
-const { Schedule, User, Employee } = require("../config/db");
+const { Schedule, User, Employee, Holiday } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 
@@ -157,6 +157,24 @@ const ScheduleController = {
         });
       }
 
+      // If shift is marked as Holiday, dynamically persist to centralized Holiday Calendar
+      if (shift_name && shift_name.toLowerCase().includes("holiday")) {
+        const dObj = new Date(`${date}T12:00:00+05:30`);
+        const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+        const dayName = DAY_NAMES[dObj.getDay()];
+        const mShort = MONTH_NAMES[dObj.getMonth()];
+        const dNum = dObj.getDate();
+        const hTitle = notes || "Company Holiday";
+
+        const existingH = await Holiday.findOne({ where: { date } });
+        if (existingH) {
+          await existingH.update({ name: hTitle, day: dayName, month: mShort, day_num: dNum, type: "Company", dept: resolvedDept });
+        } else {
+          await Holiday.create({ name: hTitle, date, day: dayName, month: mShort, day_num: dNum, type: "Company", dept: resolvedDept, created_by: creator?.name || creatorId });
+        }
+      }
+
       return res.status(201).json({
         success: true,
         message: "Shift schedule assigned successfully",
@@ -171,10 +189,14 @@ const ScheduleController = {
   // POST /api/auth/schedule/assign-rotational
   async assignRotationalWeekOff(req, res) {
     try {
-      const { role, employee_id: creatorId } = req.user;
+      const role = (req.user?.role || "employee").toLowerCase();
+      const creatorId = req.user?.employee_id || req.user?.employee_code || null;
       const {
         employee_ids,
         rotational_off_day,
+        off_type = "week_off", // "week_off" or "holiday"
+        holiday_name,
+        holiday_scope = "weekday", // "weekday" or "all_days"
         shift_name = "General Shift",
         start_time = "10:00",
         end_time = "19:00",
@@ -195,8 +217,13 @@ const ScheduleController = {
         return res.status(400).json({ error: "Rotational off day, start date, and end date are required" });
       }
 
-      const creator = await User.findOne({ where: { employee_id: creatorId } });
-      const creatorDept = creator ? (creator.dept || "General") : "General";
+      let creator = null;
+      if (creatorId) {
+        creator = await User.findOne({
+          where: { employee_id: creatorId }
+        });
+      }
+      const creatorDept = creator ? (creator.dept || req.user?.department || "General") : (req.user?.department || "General");
 
       // 1. Resolve target employees
       let targetEmpCodes = Array.isArray(employee_ids) ? employee_ids : (employee_ids ? [employee_ids] : []);
@@ -231,7 +258,16 @@ const ScheduleController = {
       }
 
       // 2. Prepare date range & day mapping
-      const targetOffDay = rotational_off_day.trim().toLowerCase();
+      const isHolidayAssignment =
+        off_type === "holiday" ||
+        (rotational_off_day && rotational_off_day.toLowerCase().includes("holiday")) ||
+        (shift_name && shift_name.toLowerCase().includes("holiday"));
+
+      const holidayTitle = (holiday_name || notes || "Company Holiday").trim();
+      const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+      const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+      const targetOffDay = (rotational_off_day || "").trim().toLowerCase();
       const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
       const datesToProcess = [];
@@ -242,10 +278,27 @@ const ScheduleController = {
         const dStr = cur.toISOString().split("T")[0];
         const dayOfWeekIndex = cur.getDay();
         const dayOfWeekName = dayNames[dayOfWeekIndex];
+
+        let isHoliday = false;
+        let isRotationalOff = false;
+
+        if (isHolidayAssignment) {
+          if (targetOffDay === "holiday" || targetOffDay === "" || targetOffDay === "all") {
+            isHoliday = true;
+          } else if (dayOfWeekName === targetOffDay) {
+            isHoliday = true;
+          } else if (shift_name && shift_name.toLowerCase().includes("holiday")) {
+            isHoliday = true;
+          }
+        } else {
+          isRotationalOff = dayOfWeekName === targetOffDay;
+        }
+
         datesToProcess.push({
           dateStr: dStr,
           dayName: dayOfWeekName,
-          isRotationalOff: dayOfWeekName === targetOffDay
+          isRotationalOff,
+          isHoliday
         });
         cur.setDate(cur.getDate() + 1);
       }
@@ -253,8 +306,8 @@ const ScheduleController = {
       let totalUpdated = 0;
 
       for (const u of targetUsers) {
-        // Map to Employee and User tables: update default weekly_off
-        if (set_as_default) {
+        // Map to Employee and User tables: update default weekly_off (only if regular week-off, not one-time holiday)
+        if (set_as_default && !isHolidayAssignment && !rotational_off_day.toLowerCase().includes("holiday")) {
           await User.update(
             { weekly_off: rotational_off_day },
             { where: { employee_id: u.employee_id } }
@@ -267,10 +320,25 @@ const ScheduleController = {
 
         // Upsert schedule records for each date in the period
         for (const item of datesToProcess) {
-          const shiftForDay = item.isRotationalOff ? "Week Off" : (shift_name || "General Shift");
-          const sTime = item.isRotationalOff ? "—" : (start_time || "10:00");
-          const eTime = item.isRotationalOff ? "—" : (end_time || "19:00");
-          const dayNotes = item.isRotationalOff ? (notes || "Rotational Week Off") : null;
+          let shiftForDay = shift_name || "General Shift";
+          let sTime = start_time || "10:00";
+          let eTime = end_time || "19:00";
+          let dayNotes = null;
+          let isOff = false;
+
+          if (item.isHoliday) {
+            shiftForDay = "Holiday";
+            sTime = "—";
+            eTime = "—";
+            dayNotes = holidayTitle;
+            isOff = true;
+          } else if (item.isRotationalOff) {
+            shiftForDay = "Week Off";
+            sTime = "—";
+            eTime = "—";
+            dayNotes = notes || "Rotational Week Off";
+            isOff = true;
+          }
 
           let sched = await Schedule.findOne({
             where: {
@@ -287,7 +355,7 @@ const ScheduleController = {
               shift_name: shiftForDay,
               start_time: sTime,
               end_time: eTime,
-              is_rotational_off: item.isRotationalOff,
+              is_rotational_off: isOff,
               created_by: creator?.name || creatorId,
               notes: dayNotes
             });
@@ -302,7 +370,7 @@ const ScheduleController = {
               end_time: eTime,
               date: item.dateStr,
               status: "Published",
-              is_rotational_off: item.isRotationalOff,
+              is_rotational_off: isOff,
               created_by: creator?.name || creatorId,
               notes: dayNotes
             });
@@ -311,11 +379,58 @@ const ScheduleController = {
         }
       }
 
+      // 3. Dynamically sync and update every assigned Holiday date in the central Holiday Calendar
+      const holidayDates = new Set();
+      if (isHolidayAssignment) {
+        for (const item of datesToProcess) {
+          if (item.isHoliday) {
+            holidayDates.add(item.dateStr);
+          }
+        }
+
+        for (const dStr of holidayDates) {
+          const dObj = new Date(`${dStr}T12:00:00+05:30`);
+          const dayCapitalized = DAY_NAMES[dObj.getDay()];
+          const mShort = MONTH_NAMES[dObj.getMonth()];
+          const dNum = dObj.getDate();
+
+          const existingH = await Holiday.findOne({ where: { date: dStr } });
+          if (existingH) {
+            await existingH.update({
+              name: holidayTitle,
+              day: dayCapitalized,
+              month: mShort,
+              day_num: dNum,
+              type: "Company",
+              dept: creatorDept || "All",
+              created_by: creator?.name || creatorId,
+              notes: notes || "Assigned via Dynamic Shift Roster"
+            });
+          } else {
+            await Holiday.create({
+              name: holidayTitle,
+              date: dStr,
+              day: dayCapitalized,
+              month: mShort,
+              day_num: dNum,
+              type: "Company",
+              dept: creatorDept || "All",
+              created_by: creator?.name || creatorId,
+              notes: notes || "Assigned via Dynamic Shift Roster"
+            });
+          }
+        }
+      }
+
       return res.json({
         success: true,
-        message: `Successfully assigned rotational week-off (${rotational_off_day}) for ${targetUsers.length} employee(s) across ${datesToProcess.length} days`,
+        message: isHolidayAssignment
+          ? `Successfully assigned Holiday (${holidayTitle}) and dynamically updated central Holiday Calendar for ${targetUsers.length} employee(s)`
+          : `Successfully assigned rotational week-off (${rotational_off_day}) for ${targetUsers.length} employee(s) across ${datesToProcess.length} days`,
         employees_updated: targetUsers.length,
-        schedules_count: totalUpdated
+        schedules_count: totalUpdated,
+        holiday_created: isHolidayAssignment,
+        holiday_dates: Array.from(holidayDates)
       });
     } catch (err) {
       console.error("Assign rotational schedule error:", err.message);

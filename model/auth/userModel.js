@@ -63,6 +63,12 @@ module.exports = (sequelize) => {
         defaultValue: "Active",
       },
 
+      employment_type: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        defaultValue: "Permanent", // "Permanent", "Probation", "Intern"
+      },
+
       current_salary: {
         type: DataTypes.DECIMAL(12, 2),
         allowNull: true,

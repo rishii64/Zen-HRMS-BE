@@ -1,4 +1,4 @@
-const { Attendance, User, Employee, Schedule, sequelize } = require("../config/db");
+const { Attendance, User, Employee, Schedule, Holiday, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 const { getISTParts, getISTDateStr, getISTTimeStr } = require("../utils/timezone");
 
@@ -116,7 +116,7 @@ const AttendanceController = {
   // GET /api/auth/attendance
   async getAttendance(req, res) {
     try {
-      const { date, dept, range, scope, emp_id } = req.query;
+      const { date, dept, range, scope, emp_id, order } = req.query;
       const { role, employee_id } = req.user;
 
       // Find user details to check department
@@ -230,9 +230,13 @@ const AttendanceController = {
         empWhere.employee_id = { [Op.iLike]: employee_id.trim() };
       }
 
+      const isAsc = (order && String(order).toLowerCase() === "asc") ||
+        (order !== "desc" && (range === "month" || range === "year"));
+      const sortDirection = isAsc ? "ASC" : "DESC";
+
       const records = await Attendance.findAll({
         where: whereClause,
-        order: [["date", "DESC"], ["id", "DESC"]],
+        order: [["date", sortDirection], ["id", sortDirection]],
       });
 
       // Enrich records with shift information from Schedule table and employee profile details
@@ -292,6 +296,17 @@ const AttendanceController = {
         schedules.forEach(s => {
           const key = `${(s.employee_id || "").toLowerCase().trim()}_${s.date}`;
           scheduleMap[key] = s;
+        });
+
+        // 2b. Fetch company & public holidays in this date window
+        const holidays = await Holiday.findAll({
+          where: {
+            date: { [Op.between]: [startDateStr, endDateStr] }
+          }
+        });
+        const holidayMap = {};
+        holidays.forEach(h => {
+          holidayMap[h.date] = h;
         });
 
         // 3. Enrich existing punched records
@@ -360,7 +375,12 @@ const AttendanceController = {
               shiftStart = matchedSchedule.start_time || "10:00";
               shiftEnd = matchedSchedule.end_time || "19:00";
 
-              if (shiftName.toLowerCase().includes("off")) {
+              if (shiftName.toLowerCase().includes("holiday")) {
+                status = "Holiday";
+                shiftStart = "—";
+                shiftEnd = "—";
+                notes = matchedSchedule.notes || "Official Company Holiday";
+              } else if (shiftName.toLowerCase().includes("off")) {
                 status = "Week Off";
                 shiftStart = "—";
                 shiftEnd = "—";
@@ -369,6 +389,13 @@ const AttendanceController = {
                 status = isFuture ? "Scheduled" : "Absent";
                 notes = matchedSchedule.notes || (isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)");
               }
+            } else if (holidayMap[dStr]) {
+              const matchedHoliday = holidayMap[dStr];
+              status = "Holiday";
+              shiftName = "Holiday";
+              shiftStart = "—";
+              shiftEnd = "—";
+              notes = matchedHoliday.name || "Official Company Holiday";
             } else {
               // Check employee's weekly_off setting
               if (dayName === empWeeklyOff) {
@@ -411,12 +438,14 @@ const AttendanceController = {
         console.warn("Could not enrich attendance with schedules and profiles:", enrichErr.message);
       }
 
-      // Combine real logs and synthesized records, ordered by date descending
+      // Combine real logs and synthesized records, ordered by date (ascending for month/year or order=asc)
       const combinedRecords = [...enrichedRecords, ...synthesizedRecords].sort((a, b) => {
         if (a.date !== b.date) {
-          return b.date.localeCompare(a.date);
+          return isAsc ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date);
         }
-        return (a.employee_id || "").localeCompare(b.employee_id || "");
+        const empComp = (a.employee_id || "").localeCompare(b.employee_id || "");
+        if (empComp !== 0) return empComp;
+        return (a.check_in || "").localeCompare(b.check_in || "");
       });
 
       return res.json({ success: true, data: combinedRecords });
@@ -473,8 +502,9 @@ const AttendanceController = {
       let plainRecord = record ? (record.toJSON ? record.toJSON() : { ...record }) : null;
       if (plainRecord) {
         plainRecord.shift_name = schedule?.shift_name || "General Shift";
-        plainRecord.shift_start = schedule?.start_time || "10:00";
-        plainRecord.shift_end = schedule?.end_time || "19:00";
+        const isValidTime = (t) => t && typeof t === "string" && t.trim() !== "—" && t.trim() !== "-" && t.includes(":");
+        plainRecord.shift_start = isValidTime(schedule?.start_time) ? schedule.start_time : "10:00";
+        plainRecord.shift_end = isValidTime(schedule?.end_time) ? schedule.end_time : "19:00";
       }
 
       return res.json({

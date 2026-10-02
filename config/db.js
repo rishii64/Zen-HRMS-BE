@@ -38,6 +38,8 @@ const KpiGoalItem = require("../model/kpiGoalItemModel")(sequelize);
 const RecruitmentRequisition = require("../model/recruitmentRequisitionModel")(sequelize);
 const RecruitmentCandidate = require("../model/recruitmentCandidateModel")(sequelize);
 const Onboarding = require("../model/onboardingModel")(sequelize);
+const Holiday = require("../model/holidayModel")(sequelize);
+const CelebrationBroadcast = require("../model/celebrationModel")(sequelize);
 
 // Model Associations
 
@@ -303,6 +305,31 @@ const connectDB = async () => {
     await sequelize.authenticate();
     // Sync models (alter table structure to match models if changed)
     await sequelize.sync({ alter: true });
+
+    // Seed standard initial company holidays if none exist
+    try {
+      const hCount = await Holiday.count();
+      if (hCount === 0) {
+        const DEFAULT_HOLIDAYS = [
+          { name: "New Year Day", day: "Thursday", date: "2026-01-01", month: "JAN", day_num: 1, type: "Public" },
+          { name: "Republic Day", day: "Monday", date: "2026-01-26", month: "JAN", day_num: 26, type: "National" },
+          { name: "Holi Festival", day: "Wednesday", date: "2026-03-25", month: "MAR", day_num: 25, type: "Festival" },
+          { name: "Independence Day", day: "Saturday", date: "2026-08-15", month: "AUG", day_num: 15, type: "National" },
+          { name: "Gandhi Jayanti", day: "Friday", date: "2026-10-02", month: "OCT", day_num: 2, type: "National" },
+          { name: "Durga Puja (Maha Saptami)", day: "Saturday", date: "2026-10-17", month: "OCT", day_num: 17, type: "Festival" },
+          { name: "Durga Puja (Maha Ashtami)", day: "Sunday", date: "2026-10-18", month: "OCT", day_num: 18, type: "Festival" },
+          { name: "Durga Puja (Maha Navami)", day: "Tuesday", date: "2026-10-20", month: "OCT", day_num: 20, type: "Festival" },
+          { name: "Durga Puja (Bijoya Dashami)", day: "Wednesday", date: "2026-10-21", month: "OCT", day_num: 21, type: "Festival" },
+          { name: "Diwali / Deepavali", day: "Sunday", date: "2026-11-08", month: "NOV", day_num: 8, type: "Festival" },
+          { name: "Christmas Day", day: "Friday", date: "2026-12-25", month: "DEC", day_num: 25, type: "Public" }
+        ];
+        await Holiday.bulkCreate(DEFAULT_HOLIDAYS);
+        console.log("Default company holidays seeded successfully.");
+      }
+    } catch (seedErr) {
+      console.warn("Could not seed default holidays:", seedErr.message);
+    }
+
     console.log("PG connected...");
   } catch (err) {
     console.error("Postgres connection error:", err);
@@ -330,4 +357,6 @@ module.exports = {
   RecruitmentRequisition,
   RecruitmentCandidate,
   Onboarding,
+  Holiday,
+  CelebrationBroadcast,
 };

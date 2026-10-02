@@ -51,6 +51,12 @@ module.exports = (sequelize) => {
         defaultValue: "Active",
       },
 
+      employment_type: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        defaultValue: "Permanent", // "Permanent", "Probation", "Intern"
+      },
+
       job_role: {
         type: DataTypes.STRING(50),
         allowNull: false,
