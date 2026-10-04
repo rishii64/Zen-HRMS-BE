@@ -39,7 +39,6 @@ const RecruitmentRequisition = require("../model/recruitmentRequisitionModel")(s
 const RecruitmentCandidate = require("../model/recruitmentCandidateModel")(sequelize);
 const Onboarding = require("../model/onboardingModel")(sequelize);
 const Holiday = require("../model/holidayModel")(sequelize);
-const CelebrationBroadcast = require("../model/celebrationModel")(sequelize);
 
 // Model Associations
 
@@ -358,5 +357,4 @@ module.exports = {
   RecruitmentCandidate,
   Onboarding,
   Holiday,
-  CelebrationBroadcast,
 };
