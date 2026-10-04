@@ -6,16 +6,20 @@ const sequelize = new Sequelize(
   process.env.DB_USERNAME || "postgres",
   process.env.DB_PASSWORD || "rishiPDB",
   {
-    host: process.env.DB_HOST || "localhost",
+    host: process.env.DB_HOST || "127.0.0.1",
     port: parseInt(process.env.DB_PORT, 10) || 5432,
     dialect: "postgres",
     timezone: "+05:30",
     logging: false,
     pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
+      max: parseInt(process.env.DB_POOL_MAX, 10) || 20,
+      min: parseInt(process.env.DB_POOL_MIN, 10) || 2,
+      acquire: 20000,
       idle: 10000,
+      evict: 5000,
+    },
+    dialectOptions: {
+      connectTimeout: 10000,
     },
   }
 );
@@ -303,8 +307,28 @@ Onboarding.belongsTo(Employee, {
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
-    // Sync models (alter table structure to match models if changed)
-    await sequelize.sync({ alter: true });
+    console.log("PostgreSQL connected successfully.");
+
+    // Fast, non-blocking check to ensure celebration_broadcasts table & index exist without catalog locking
+    try {
+      await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS celebration_broadcasts (
+          id SERIAL PRIMARY KEY,
+          type VARCHAR(50) DEFAULT 'birthday',
+          employee_name VARCHAR(255) NOT NULL,
+          event_date VARCHAR(50),
+          title VARCHAR(255),
+          message TEXT,
+          created_by VARCHAR(255),
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_celebration_active_created ON celebration_broadcasts (is_active, created_at DESC);
+      `);
+    } catch (tblErr) {
+      console.warn("Could not ensure celebration_broadcasts table:", tblErr.message);
+    }
 
     // Seed standard initial company holidays if none exist
     try {
@@ -330,10 +354,10 @@ const connectDB = async () => {
       console.warn("Could not seed default holidays:", seedErr.message);
     }
 
-    console.log("PG connected...");
+    console.log("PG ready for requests.");
   } catch (err) {
     console.error("Postgres connection error:", err);
-    process.exit(1);
+    throw err;
   }
 };
 

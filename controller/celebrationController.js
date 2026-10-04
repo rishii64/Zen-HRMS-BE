@@ -288,10 +288,31 @@ const buildCelebrationsData = (dbEmployees = []) => {
   };
 };
 
+// In-memory celebrations cache to eliminate database load on dashboard visits
+let celebrationsCache = {
+  data: null,
+  timestamp: 0,
+  ttl: 60 * 1000 // 60 seconds TTL
+};
+
+function invalidateCelebrationsCache() {
+  celebrationsCache.data = null;
+  celebrationsCache.timestamp = 0;
+}
+
 class CelebrationController {
   // GET /api/auth/celebrations
   static async getCelebrations(req, res) {
     try {
+      const now = Date.now();
+      if (celebrationsCache.data && (now - celebrationsCache.timestamp) < celebrationsCache.ttl) {
+        return res.status(200).json({
+          success: true,
+          data: celebrationsCache.data,
+          cached: true
+        });
+      }
+
       let dbEmployees = [];
       try {
         dbEmployees = await Employee.findAll({
@@ -307,7 +328,7 @@ class CelebrationController {
       // Fetch active broadcast within the last 24 hours
       let activeBroadcast = null;
       try {
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
         activeBroadcast = await CelebrationBroadcast.findOne({
           where: {
             is_active: true,
@@ -321,12 +342,20 @@ class CelebrationController {
         console.warn("Could not fetch active broadcast:", bErr.message);
       }
 
+      const payload = {
+        ...data,
+        activeBroadcast
+      };
+
+      celebrationsCache = {
+        data: payload,
+        timestamp: now,
+        ttl: 60 * 1000
+      };
+
       return res.status(200).json({
         success: true,
-        data: {
-          ...data,
-          activeBroadcast
-        }
+        data: payload
       });
     } catch (error) {
       console.error("Error in getCelebrations:", error);
@@ -381,6 +410,9 @@ class CelebrationController {
         is_active: true
       });
 
+      // Invalidate cache immediately so new broadcast propagates
+      invalidateCelebrationsCache();
+
       return res.status(201).json({
         success: true,
         message: `Celebration notification successfully broadcasted for ${employeeName}!`,
@@ -432,6 +464,9 @@ class CelebrationController {
       } else {
         await CelebrationBroadcast.update({ is_active: false }, { where: { is_active: true } });
       }
+
+      // Invalidate cache
+      invalidateCelebrationsCache();
 
       return res.status(200).json({
         success: true,

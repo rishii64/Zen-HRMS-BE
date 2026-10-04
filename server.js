@@ -39,13 +39,17 @@ const EmployeeController = require("./controller/employeeController");
 app.get("/api/salary/:code", EmployeeController.getSalaryStructure);
 app.post("/api/salary/:code", EmployeeController.updateSalaryStructure);
 
-// Database connection
+// Database connection & Server initialization
 db.connectDB()
   .then(() => {
-    console.log("Database connected...");
+    app.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+    });
   })
-  .catch((err) => console.log("Error: " + err));
-
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+  .catch((err) => {
+    console.error("❌ Database connection error on startup:", err);
+    // Bind port so process remains inspectable by PM2 / healthcheck
+    app.listen(PORT, () => {
+      console.log(`⚠️ Server running on port ${PORT} with DB errors`);
+    });
+  });
