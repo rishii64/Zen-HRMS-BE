@@ -302,8 +302,14 @@ Onboarding.belongsTo(Employee, {
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
-    // Sync models (alter table structure to match models if changed)
-    await sequelize.sync({ alter: true });
+    // In production, schema is managed via PG_Complete_Schema.sql to prevent lock contention
+    if (process.env.NODE_ENV !== "production") {
+      try {
+        await sequelize.sync({ alter: true });
+      } catch (syncErr) {
+        console.warn("Sequelize sync warning (schema migration available in PG Doc.txt):", syncErr.message);
+      }
+    }
 
     // Seed standard initial company holidays if none exist
     try {
@@ -331,8 +337,7 @@ const connectDB = async () => {
 
     console.log("PG connected...");
   } catch (err) {
-    console.error("Postgres connection error:", err);
-    process.exit(1);
+    console.error("Postgres connection error:", err.message);
   }
 };
 
