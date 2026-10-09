@@ -73,6 +73,8 @@ const ScheduleController = {
       const { role, employee_id: creatorId } = req.user;
       const {
         employee_id,
+        employee_ids,
+        apply_to_all,
         name,
         dept,
         designation,
@@ -84,23 +86,130 @@ const ScheduleController = {
         notes
       } = req.body;
 
-      if (!employee_id || !date || !shift_name) {
-        return res.status(400).json({ error: "Employee ID, Date, and Shift Name are required" });
+      const isApplyToAll = Boolean(apply_to_all || employee_id === "ALL" || employee_id === "all");
+
+      if (!isApplyToAll && !employee_id) {
+        return res.status(400).json({ error: "Employee ID is required" });
+      }
+      if (!date || !shift_name) {
+        return res.status(400).json({ error: "Date and Shift Name are required" });
       }
 
       const creator = await User.findOne({ where: { employee_id: creatorId } });
-      const targetUser = await User.findOne({ where: { employee_id } });
-
-      if (!targetUser) {
-        return res.status(404).json({ error: "Target employee not found" });
-      }
-
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
       const isHodOrManager = role === "hod" || role === "manager";
 
       // Permission Enforcement
       if (!isHrOrAdmin && !isHodOrManager) {
         return res.status(403).json({ error: "Only HOD, HR, or Admin can assign schedules" });
+      }
+
+      const isOff = (shift_name || "").toLowerCase().includes("off");
+      const resolvedStartTime = isOff ? "—" : (start_time || "10:00");
+      const resolvedEndTime = isOff ? "—" : (end_time || "19:00");
+
+      // CASE 1: APPLY TO ALL EMPLOYEES
+      if (isApplyToAll) {
+        let userWhere = {};
+        if (isHodOrManager && !isHrOrAdmin) {
+          const creatorDept = creator ? creator.dept : (req.user?.department || "General");
+          userWhere.dept = { [Op.iLike]: (creatorDept || "General").trim() };
+        } else if (!employee_ids && dept && dept !== "All") {
+          userWhere.dept = { [Op.iLike]: dept.trim() };
+        }
+
+        // If a specific list of employee IDs was passed with apply_to_all
+        if (Array.isArray(employee_ids) && employee_ids.length > 0) {
+          const cleanIds = employee_ids.map((id) => String(id).trim()).filter(Boolean);
+          userWhere[Op.or] = [
+            { employee_id: { [Op.in]: cleanIds } },
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), {
+              [Op.in]: cleanIds.map((id) => id.toLowerCase()),
+            }),
+          ];
+        }
+
+        const targetUsers = await User.findAll({ where: userWhere });
+
+        if (targetUsers.length === 0) {
+          return res.status(404).json({ error: "No matching employees found to assign schedule" });
+        }
+
+        for (const u of targetUsers) {
+          const uDept = u.dept || dept || "General";
+          const uName = u.name;
+          const uDesignation = u.designation || "Staff";
+
+          let schedule = await Schedule.findOne({
+            where: {
+              employee_id: u.employee_id,
+              date
+            }
+          });
+
+          if (schedule) {
+            await schedule.update({
+              name: uName,
+              dept: uDept,
+              designation: uDesignation,
+              shift_name,
+              start_time: resolvedStartTime,
+              end_time: resolvedEndTime,
+              week_start: week_start || null,
+              is_rotational_off: isOff,
+              created_by: creator?.name || creatorId,
+              notes: notes || null
+            });
+          } else {
+            await Schedule.create({
+              employee_id: u.employee_id,
+              name: uName,
+              dept: uDept,
+              designation: uDesignation,
+              shift_name,
+              start_time: resolvedStartTime,
+              end_time: resolvedEndTime,
+              date,
+              week_start: week_start || null,
+              status: "Published",
+              is_rotational_off: isOff,
+              created_by: creator?.name || creatorId,
+              notes: notes || null
+            });
+          }
+        }
+
+        // If shift is marked as Holiday, dynamically persist to centralized Holiday Calendar
+        if (shift_name && shift_name.toLowerCase().includes("holiday")) {
+          const dObj = new Date(`${date}T12:00:00+05:30`);
+          const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+          const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+          const dayName = DAY_NAMES[dObj.getDay()];
+          const mShort = MONTH_NAMES[dObj.getMonth()];
+          const dNum = dObj.getDate();
+          const hTitle = notes || "Company Holiday";
+          const hDept = dept && dept !== "All" ? dept : (creator?.dept || "General");
+
+          const existingH = await Holiday.findOne({ where: { date } });
+          if (existingH) {
+            await existingH.update({ name: hTitle, day: dayName, month: mShort, day_num: dNum, type: "Company", dept: hDept });
+          } else {
+            await Holiday.create({ name: hTitle, date, day: dayName, month: mShort, day_num: dNum, type: "Company", dept: hDept, created_by: creator?.name || creatorId });
+          }
+        }
+
+        return res.status(201).json({
+          success: true,
+          message: `Shift schedule assigned successfully to all ${targetUsers.length} employees`,
+          count: targetUsers.length
+        });
+      }
+
+      // CASE 2: SINGLE EMPLOYEE ASSIGNMENT
+      const targetUser = await User.findOne({ where: { employee_id } });
+
+      if (!targetUser) {
+        return res.status(404).json({ error: "Target employee not found" });
       }
 
       if (isHodOrManager && !isHrOrAdmin) {
@@ -113,10 +222,6 @@ const ScheduleController = {
       const resolvedDept = dept || targetUser.dept || "General";
       const resolvedName = name || targetUser.name;
       const resolvedDesignation = designation || targetUser.designation || "Staff";
-
-      const isOff = (shift_name || "").toLowerCase().includes("off");
-      const resolvedStartTime = isOff ? "—" : (start_time || "10:00");
-      const resolvedEndTime = isOff ? "—" : (end_time || "19:00");
 
       // Find or create schedule for employee + date
       let schedule = await Schedule.findOne({

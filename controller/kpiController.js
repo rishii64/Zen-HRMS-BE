@@ -1,5 +1,271 @@
-const { KpiTemplate, KpiAssignment, KpiGoalItem, Employee, User, sequelize } = require("../config/db");
+const {
+  KpiTemplate,
+  KpiAssignment,
+  KpiGoalItem,
+  PerformanceReview,
+  ReviewQuestionItem,
+  Employee,
+  User,
+  sequelize,
+} = require("../config/db");
 const { Op } = require("sequelize");
+
+const OFFICIAL_QUESTIONNAIRE_SET = [
+  // ── 1. JOB KNOWLEDGE (Weightage : 2 -> 20% Total, 4.0% each) ──
+  {
+    question_key: "jk_1",
+    title: "Level of professional knowledge in relation to job requirements",
+    description: "Evaluates depth and proficiency of professional expertise required to execute core responsibilities.",
+    category: "JOB KNOWLEDGE",
+    weightage: 4.0,
+  },
+  {
+    question_key: "jk_2",
+    title: "Familiarity with job and related functions",
+    description: "Understanding of internal processes, functional scope, tooling, and inter-departmental workflows.",
+    category: "JOB KNOWLEDGE",
+    weightage: 4.0,
+  },
+  {
+    question_key: "jk_3",
+    title: "Foresight & vision in anticipating work needs",
+    description: "Ability to forecast upcoming requirements, risks, bottlenecks, and prepare contingency actions proactively.",
+    category: "JOB KNOWLEDGE",
+    weightage: 4.0,
+  },
+  {
+    question_key: "jk_4",
+    title: "Keeping abreast of the latest developments relating to one's functional area and the industry in general",
+    description: "Continuous learning and application of evolving industry standards, tools, and best practices.",
+    category: "JOB KNOWLEDGE",
+    weightage: 4.0,
+  },
+  {
+    question_key: "jk_5",
+    title: "Ability to analyse problems in its various aspects",
+    description: "Critical thinking, root cause analysis, and multi-dimensional problem solving capability.",
+    category: "JOB KNOWLEDGE",
+    weightage: 4.0,
+  },
+
+  // ── 2. JOB PERFORMANCE (Weightage : 2 -> 20% Total, 2.0% each) ──
+  {
+    question_key: "jp_1",
+    title: "Urgency to get things done; productivity orientation",
+    description: "Drive to deliver results quickly with high momentum and output orientation.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_2",
+    title: "Attention to detail",
+    description: "Meticulousness, thoroughness, and avoidance of careless errors in day-to-day deliverables.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_3",
+    title: "Ability to prioritise work",
+    description: "Effectively distinguishing high-impact priorities from urgent non-critical distractions.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_4",
+    title: "Willingness to take responsibility and be accountable",
+    description: "Owning outcomes, standing behind delivered work, and being accountable for successes and failures.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_5",
+    title: "Acceptance of additional responsibility; responding to the need of the hour",
+    description: "Stepping up willingly when emergencies arise or additional responsibilities are assigned.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_6",
+    title: "Self starting ability",
+    description: "Demonstrating drive and autonomy without needing continuous prompt or supervision.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_7",
+    title: "Loyalty & commitment – Sincerity in performing work in the overall interest of the company",
+    description: "Dedication to organizational mission and putting company interest ahead of personal convenience.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_8",
+    title: "Customer orientation - internal and external",
+    description: "Delivering exceptional value and prompt response to both internal stakeholders and external clients.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_9",
+    title: "Cross-functional interest",
+    description: "Active curiosity and collaboration across departments beyond one's immediate role.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+  {
+    question_key: "jp_10",
+    title: "Value addition to management in areas not directly related to oneself",
+    description: "Sharing strategic ideas, cost efficiencies, and constructive suggestions outside core scope.",
+    category: "JOB PERFORMANCE",
+    weightage: 2.0,
+  },
+
+  // ── 3. PERSONALITY (Weightage : 2 -> 20% Total, 2.0% each) ──
+  {
+    question_key: "pers_1",
+    title: "Openness - being frank and candid in accepting and giving suggestions, ideas, opinions; accepting errors",
+    description: "Transparent, honest communication and humbleness in acknowledging mistakes.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_2",
+    title: "Empathy - to understand and appreciate other's feelings",
+    description: "Demonstrating compassion, emotional intelligence, and respect for colleagues' perspectives.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_3",
+    title: "Integrity - honesty and uprightness of character",
+    description: "Uncompromising adherence to moral principles, truthfulness, and ethical conduct.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_4",
+    title: "Flexibility- ability to change on the basis of feedback and to respond quickly to different people / situations",
+    description: "Adaptable mindset, positive receipt of constructive critique, and agility in shifting gears.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_5",
+    title: "Perseverance - to endure hardships and continue activity in the face of difficulty",
+    description: "Grit and persistence through complex challenges, unexpected roadblocks, or difficult situations.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_6",
+    title: "Creativity / Innovativeness - to produce new ideas deviating from traditional patterns of thinking",
+    description: "Originality and fresh perspectives to overcome stagnancy or improve status quo.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_7",
+    title: "Capacity to withstand stress",
+    description: "Maintaining composure, clarity of thought, and productivity under tight deadlines and pressure.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_8",
+    title: "Dependability – is consistent in habits – both punctual and regular in work and shows personal / organisational discipline",
+    description: "Reliable attendance, punctuality, task completion reliability, and steadfast work ethic.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_9",
+    title: "Evenness of temper",
+    description: "Emotional stability, patience, calmness, and professionalism during disagreements or high tension.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+  {
+    question_key: "pers_10",
+    title: "Adaptability – identifying oneself with the culture of the organisation in terms of values, beliefs and customs",
+    description: "Alignment with corporate ethos, culture, camaraderie, and organizational harmony.",
+    category: "PERSONALITY",
+    weightage: 2.0,
+  },
+
+  // ── 4. LEADERSHIP SKILLS (Weightage : 4 -> 40% Total, 4.0% each) ──
+  {
+    question_key: "lead_1",
+    title: "Ability to get work done through delegation",
+    description: "Empowering teammates with clear ownership, appropriate authority, and accountability.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_2",
+    title: "Ability to inspire and motivate subordinates and command respect from them",
+    description: "Leading by example, rallying the team towards common vision, and building authentic trust.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_3",
+    title: "Interpersonal skills – rapport with juniors, peers, seniors",
+    description: "Fostering healthy working relationships across hierarchical levels with warmth and respect.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_4",
+    title: "Ability to reprimand without incurring resentment",
+    description: "Providing firm corrective feedback constructively without damaging morale or relationships.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_5",
+    title: "Concern for welfare of subordinates",
+    description: "Demonstrating genuine care for team members' well-being, work-life balance, and growth.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_6",
+    title: "Guidance and encouragement provided to subordinates to develop their full potential and providing constructive feedback to them; grooming one’s own successor",
+    description: "Mentoring, succession planning, identifying high potentials, and elevating teammates' skills.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_7",
+    title: "Objectivity, impartiality and thoroughness in evaluating, performance, ability and potential of subordinates",
+    description: "Fairness, meritocracy, data-backed assessment without favoritism or bias.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_8",
+    title: "Communication – sells ideas in a persuasive and logical manner",
+    description: "Articulating ideas convincingly, presenting structured rationale, and gaining stakeholder buy-in.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_9",
+    title: "Ability to take hard decisions",
+    description: "Courage to make tough calls decisively when necessary in the interest of the organisation.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+  {
+    question_key: "lead_10",
+    title: "Flexibility to go along with a decision after it is taken",
+    description: "Disagree and commit: fully supporting and executing collective decisions once finalized.",
+    category: "LEADERSHIP SKILLS",
+    weightage: 4.0,
+  },
+];
+
+const DEMO_QUESTIONNAIRE_SET = OFFICIAL_QUESTIONNAIRE_SET;
 
 const KPI_DEFAULT_SEEDS = [
   // Engineering / Product
@@ -748,6 +1014,868 @@ const KpiController = {
     } catch (err) {
       console.error("Calibrate and approve error:", err.message);
       return res.status(500).json({ error: "Failed to finalize and calibrate KPI cycle" });
+    }
+  },
+
+  // =========================================================================
+  // 6. QUESTIONNAIRE REVIEWS (6-Months Probation & Annual Appraisal Lifecycle)
+  // Hierarchy: Employee Self -> TL (if avail) -> Manager (if avail) -> HOD -> HR
+  // =========================================================================
+
+  async getDemoQuestions(req, res) {
+    return res.json({ success: true, questions: DEMO_QUESTIONNAIRE_SET });
+  },
+
+  async initiateReview(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const {
+        employee_id,
+        review_type = "probation", // "probation" | "appraisal"
+        cycle_name,
+        tl_id,
+        tl_name,
+        manager_id,
+        manager_name,
+        hod_id,
+        hod_name,
+        questions,
+      } = req.body;
+
+      if (!employee_id) {
+        await t.rollback();
+        return res.status(400).json({ error: "employee_id is required" });
+      }
+
+      // Look up employee
+      const emp = await Employee.findOne({
+        where: sequelize.where(
+          sequelize.fn("LOWER", sequelize.col("employee_id")),
+          employee_id.toLowerCase().trim()
+        ),
+      });
+
+      const user = await User.findOne({
+        where: sequelize.where(
+          sequelize.fn("LOWER", sequelize.col("employee_id")),
+          employee_id.toLowerCase().trim()
+        ),
+      });
+
+      const department = emp?.dept || emp?.department || user?.dept || "General";
+      const designation = emp?.designation || user?.designation || "Staff";
+      const joiningDate = emp?.joining_date || user?.joining_date || null;
+
+      // Auto-detect hierarchy if not provided
+      // 1. Team Lead
+      let detectedTlId = tl_id || null;
+      let detectedTlName = tl_name || null;
+      if (!detectedTlId && detectedTlName !== "None") {
+        const tlUser = await User.findOne({
+          where: {
+            role: "teamlead",
+            dept: department,
+            is_active: true,
+          },
+        });
+        if (tlUser && tlUser.employee_id !== employee_id) {
+          detectedTlId = tlUser.employee_id;
+          detectedTlName = tlUser.name;
+        }
+      }
+
+      // 2. Manager
+      let detectedMgrId = manager_id || null;
+      let detectedMgrName = manager_name || null;
+      if (!detectedMgrId && detectedMgrName !== "None") {
+        const repMgrName = emp?.reporting_manager || user?.reporting_manager;
+        if (repMgrName && repMgrName !== "N/A" && repMgrName !== "None") {
+          const mgrUser = await User.findOne({
+            where: {
+              [Op.or]: [
+                { name: { [Op.iLike]: `%${repMgrName.trim()}%` } },
+                { employee_id: { [Op.iLike]: repMgrName.trim() } },
+              ],
+              is_active: true,
+            },
+          });
+          if (mgrUser && mgrUser.employee_id !== employee_id) {
+            detectedMgrId = mgrUser.employee_id;
+            detectedMgrName = mgrUser.name;
+          } else {
+            detectedMgrName = repMgrName;
+          }
+        } else {
+          const deptMgr = await User.findOne({
+            where: {
+              role: "manager",
+              dept: department,
+              is_active: true,
+            },
+          });
+          if (deptMgr && deptMgr.employee_id !== employee_id) {
+            detectedMgrId = deptMgr.employee_id;
+            detectedMgrName = deptMgr.name;
+          }
+        }
+      }
+
+      // 3. HOD
+      let detectedHodId = hod_id || null;
+      let detectedHodName = hod_name || null;
+      if (!detectedHodId) {
+        const hodUser = await User.findOne({
+          where: {
+            role: "hod",
+            dept: department,
+            is_active: true,
+          },
+        });
+        if (hodUser && hodUser.employee_id !== employee_id) {
+          detectedHodId = hodUser.employee_id;
+          detectedHodName = hodUser.name;
+        }
+      }
+
+      // Compute probation dates if probation review
+      let probStart = joiningDate;
+      let probEnd = null;
+      if (joiningDate) {
+        const d = new Date(joiningDate);
+        d.setMonth(d.getMonth() + 6);
+        probEnd = d.toISOString().split("T")[0];
+      }
+
+      const defaultCycleName =
+        cycle_name ||
+        (review_type === "probation"
+          ? `6-Month Probation Review (${new Date().getFullYear()})`
+          : `Annual Appraisal January ${new Date().getFullYear()}`);
+
+      // Create Review
+      const review = await PerformanceReview.create(
+        {
+          employee_id,
+          review_type,
+          cycle_name: defaultCycleName,
+          department,
+          designation,
+          probation_start_date: probStart,
+          probation_end_date: probEnd,
+          tl_id: detectedTlId,
+          tl_name: detectedTlName,
+          manager_id: detectedMgrId,
+          manager_name: detectedMgrName,
+          hod_id: detectedHodId,
+          hod_name: detectedHodName,
+          current_stage: "self",
+          status: "Pending_Self",
+          initiated_at: new Date(),
+        },
+        { transaction: t }
+      );
+
+      // Create question items (use demo set or provided custom set)
+      const questionList =
+        Array.isArray(questions) && questions.length > 0
+          ? questions
+          : DEMO_QUESTIONNAIRE_SET;
+
+      const questionItems = questionList.map((q) => ({
+        review_id: review.id,
+        question_key: q.question_key || `q_${Math.random().toString(36).substring(2, 7)}`,
+        title: q.title,
+        description: q.description || "",
+        category: q.category || "General",
+        weightage: parseFloat(q.weightage) || 20,
+      }));
+
+      await ReviewQuestionItem.bulkCreate(questionItems, { transaction: t });
+      await t.commit();
+
+      const created = await PerformanceReview.findByPk(review.id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: `${review_type === "probation" ? "6-Month Probation" : "Annual Appraisal"} questionnaire successfully sent to employee for self-rating.`,
+        review: created,
+      });
+    } catch (err) {
+      await t.rollback();
+      console.error("Initiate review error:", err.message);
+      return res.status(500).json({ error: "Failed to initiate performance review questionnaire" });
+    }
+  },
+
+  async submitSelfRating(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const { employee_id } = req.user;
+      const { answers = [], self_remarks = "", is_final_submit = false } = req.body;
+
+      const review = await PerformanceReview.findOne({
+        where: { id },
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+        transaction: t,
+      });
+
+      if (!review) {
+        await t.rollback();
+        return res.status(404).json({ error: "Review not found" });
+      }
+
+      let totalWeighted = 0;
+      let totalWeight = 0;
+
+      for (const a of answers) {
+        const qItem = review.questions.find((q) => q.id === a.id);
+        if (qItem) {
+          const selfRating = a.self_rating !== undefined ? parseFloat(a.self_rating) : qItem.self_rating;
+          const selfComment = a.self_comment !== undefined ? a.self_comment : qItem.self_comment;
+
+          await qItem.update(
+            {
+              self_rating: selfRating,
+              self_comment: selfComment,
+            },
+            { transaction: t }
+          );
+
+          if (selfRating && qItem.weightage) {
+            totalWeighted += selfRating * (parseFloat(qItem.weightage) / 100);
+            totalWeight += parseFloat(qItem.weightage);
+          }
+        }
+      }
+
+      const selfScore = totalWeight > 0 ? parseFloat((totalWeighted * (100 / totalWeight)).toFixed(2)) : null;
+
+      const updates = {
+        self_overall_score: selfScore,
+        self_remarks: self_remarks || review.self_remarks,
+      };
+
+      if (is_final_submit) {
+        updates.self_submitted_at = new Date();
+
+        // Determine next stage in order: TL -> Manager -> HOD
+        if (review.tl_id || (review.tl_name && review.tl_name !== "N/A" && review.tl_name !== "None")) {
+          updates.current_stage = "tl";
+          updates.status = "Pending_TL";
+        } else if (review.manager_id || (review.manager_name && review.manager_name !== "N/A" && review.manager_name !== "None")) {
+          updates.current_stage = "manager";
+          updates.status = "Pending_Manager";
+        } else {
+          updates.current_stage = "hod";
+          updates.status = "Pending_HOD";
+        }
+      }
+
+      await review.update(updates, { transaction: t });
+      await t.commit();
+
+      const refreshed = await PerformanceReview.findByPk(review.id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+
+      return res.json({
+        success: true,
+        message: is_final_submit
+          ? `Self-rating submitted! Advanced to ${refreshed.current_stage.toUpperCase()} for evaluation.`
+          : "Self-rating draft saved successfully.",
+        review: refreshed,
+      });
+    } catch (err) {
+      await t.rollback();
+      console.error("Submit self rating error:", err.message);
+      return res.status(500).json({ error: "Failed to submit self assessment" });
+    }
+  },
+
+  async submitTlReview(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const { answers = [], tl_recommendation = "", tl_remarks = "" } = req.body;
+
+      const review = await PerformanceReview.findByPk(id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+        transaction: t,
+      });
+
+      if (!review) {
+        await t.rollback();
+        return res.status(404).json({ error: "Review not found" });
+      }
+
+      let totalWeighted = 0;
+      let totalWeight = 0;
+
+      for (const a of answers) {
+        const qItem = review.questions.find((q) => q.id === a.id);
+        if (qItem) {
+          const rating = a.tl_rating !== undefined ? parseFloat(a.tl_rating) : qItem.tl_rating;
+          const comment = a.tl_comment !== undefined ? a.tl_comment : qItem.tl_comment;
+
+          await qItem.update({ tl_rating: rating, tl_comment: comment }, { transaction: t });
+
+          if (rating && qItem.weightage) {
+            totalWeighted += rating * (parseFloat(qItem.weightage) / 100);
+            totalWeight += parseFloat(qItem.weightage);
+          }
+        }
+      }
+
+      const tlScore = totalWeight > 0 ? parseFloat((totalWeighted * (100 / totalWeight)).toFixed(2)) : null;
+
+      // Next stage: Manager (if available) -> HOD
+      let nextStage = "hod";
+      let nextStatus = "Pending_HOD";
+
+      if (review.manager_id || (review.manager_name && review.manager_name !== "N/A" && review.manager_name !== "None")) {
+        nextStage = "manager";
+        nextStatus = "Pending_Manager";
+      }
+
+      await review.update(
+        {
+          tl_overall_score: tlScore,
+          tl_recommendation: tl_recommendation || review.tl_recommendation,
+          tl_remarks: tl_remarks || review.tl_remarks,
+          tl_reviewed_at: new Date(),
+          current_stage: nextStage,
+          status: nextStatus,
+        },
+        { transaction: t }
+      );
+
+      await t.commit();
+
+      const refreshed = await PerformanceReview.findByPk(review.id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+
+      return res.json({
+        success: true,
+        message: `TL review submitted! Advanced to ${nextStage.toUpperCase()} for evaluation.`,
+        review: refreshed,
+      });
+    } catch (err) {
+      await t.rollback();
+      console.error("Submit TL review error:", err.message);
+      return res.status(500).json({ error: "Failed to submit TL review" });
+    }
+  },
+
+  async submitManagerReview(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const { answers = [], manager_recommendation = "", manager_remarks = "" } = req.body;
+
+      const review = await PerformanceReview.findByPk(id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+        transaction: t,
+      });
+
+      if (!review) {
+        await t.rollback();
+        return res.status(404).json({ error: "Review not found" });
+      }
+
+      let totalWeighted = 0;
+      let totalWeight = 0;
+
+      for (const a of answers) {
+        const qItem = review.questions.find((q) => q.id === a.id);
+        if (qItem) {
+          const rating = a.manager_rating !== undefined ? parseFloat(a.manager_rating) : qItem.manager_rating;
+          const comment = a.manager_comment !== undefined ? a.manager_comment : qItem.manager_comment;
+
+          await qItem.update({ manager_rating: rating, manager_comment: comment }, { transaction: t });
+
+          if (rating && qItem.weightage) {
+            totalWeighted += rating * (parseFloat(qItem.weightage) / 100);
+            totalWeight += parseFloat(qItem.weightage);
+          }
+        }
+      }
+
+      const mgrScore = totalWeight > 0 ? parseFloat((totalWeighted * (100 / totalWeight)).toFixed(2)) : null;
+
+      await review.update(
+        {
+          manager_overall_score: mgrScore,
+          manager_recommendation: manager_recommendation || review.manager_recommendation,
+          manager_remarks: manager_remarks || review.manager_remarks,
+          manager_reviewed_at: new Date(),
+          current_stage: "hod",
+          status: "Pending_HOD",
+        },
+        { transaction: t }
+      );
+
+      await t.commit();
+
+      const refreshed = await PerformanceReview.findByPk(review.id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+
+      return res.json({
+        success: true,
+        message: "Manager review submitted! Advanced to HOD for final departmental review.",
+        review: refreshed,
+      });
+    } catch (err) {
+      await t.rollback();
+      console.error("Submit Manager review error:", err.message);
+      return res.status(500).json({ error: "Failed to submit Manager review" });
+    }
+  },
+
+  async submitHodApproval(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const {
+        answers = [],
+        hod_decision, // "confirm_permanent" | "extend_probation_3m" | "recommend_promotion" | "recommend_increment" | "needs_pip"
+        hod_remarks = "",
+      } = req.body;
+
+      const review = await PerformanceReview.findByPk(id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+        transaction: t,
+      });
+
+      if (!review) {
+        await t.rollback();
+        return res.status(404).json({ error: "Review not found" });
+      }
+
+      let totalWeighted = 0;
+      let totalWeight = 0;
+
+      for (const a of answers) {
+        const qItem = review.questions.find((q) => q.id === a.id);
+        if (qItem) {
+          const rating = a.hod_rating !== undefined ? parseFloat(a.hod_rating) : qItem.hod_rating;
+          const comment = a.hod_comment !== undefined ? a.hod_comment : qItem.hod_comment;
+
+          await qItem.update({ hod_rating: rating, hod_comment: comment }, { transaction: t });
+
+          if (rating && qItem.weightage) {
+            totalWeighted += rating * (parseFloat(qItem.weightage) / 100);
+            totalWeight += parseFloat(qItem.weightage);
+          }
+        }
+      }
+
+      const hodScore = totalWeight > 0 ? parseFloat((totalWeighted * (100 / totalWeight)).toFixed(2)) : null;
+
+      await review.update(
+        {
+          hod_overall_score: hodScore,
+          hod_decision: hod_decision || review.hod_decision,
+          hod_remarks: hod_remarks || review.hod_remarks,
+          hod_approved_at: new Date(),
+          current_stage: "hr",
+          status: "Pending_HR",
+        },
+        { transaction: t }
+      );
+
+      await t.commit();
+
+      const refreshed = await PerformanceReview.findByPk(review.id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+
+      return res.json({
+        success: true,
+        message: `HOD review and recommendation submitted! Questionnaire sent back to HR for final confirmation.`,
+        review: refreshed,
+      });
+    } catch (err) {
+      await t.rollback();
+      console.error("Submit HOD approval error:", err.message);
+      return res.status(500).json({ error: "Failed to submit HOD approval" });
+    }
+  },
+
+  async submitHrDecision(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const {
+        hr_decision, // "confirm_permanent" | "extend_probation_3m" | "reject" | "approve_appraisal"
+        hr_remarks = "",
+        final_score,
+      } = req.body;
+
+      const review = await PerformanceReview.findByPk(id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+        transaction: t,
+      });
+
+      if (!review) {
+        await t.rollback();
+        return res.status(404).json({ error: "Review not found" });
+      }
+
+      const score = final_score !== undefined
+        ? parseFloat(final_score)
+        : (review.hod_overall_score || review.manager_overall_score || review.self_overall_score || 4.5);
+
+      let finalStatus = "Confirmed_Permanent";
+      if (hr_decision === "extend_probation_3m") {
+        finalStatus = "Probation_Extended_3M";
+      } else if (hr_decision === "reject") {
+        finalStatus = "Rejected";
+      } else if (hr_decision === "approve_appraisal") {
+        finalStatus = "HR_Approved_Appraisal";
+      }
+
+      await review.update(
+        {
+          final_score: score,
+          hr_decision,
+          hr_remarks: hr_remarks || review.hr_remarks,
+          current_stage: "completed",
+          status: finalStatus,
+          hr_completed_at: new Date(),
+        },
+        { transaction: t }
+      );
+
+      // Execute Employment Actions
+      const formattedScore = score.toFixed(1);
+
+      if (hr_decision === "confirm_permanent") {
+        // Update employee and user status to Permanent!
+        await Employee.update(
+          {
+            status: "Permanent",
+            kpi: formattedScore,
+          },
+          {
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              review.employee_id.toLowerCase().trim()
+            ),
+            transaction: t,
+          }
+        );
+
+        await User.update(
+          {
+            status: "Permanent",
+            kpi: formattedScore,
+          },
+          {
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              review.employee_id.toLowerCase().trim()
+            ),
+            transaction: t,
+          }
+        );
+      } else if (hr_decision === "extend_probation_3m") {
+        // Extend probation by 3 months
+        let newEndDate = null;
+        if (review.probation_end_date) {
+          const d = new Date(review.probation_end_date);
+          d.setMonth(d.getMonth() + 3);
+          newEndDate = d.toISOString().split("T")[0];
+        } else {
+          const d = new Date();
+          d.setMonth(d.getMonth() + 3);
+          newEndDate = d.toISOString().split("T")[0];
+        }
+
+        await review.update({ probation_end_date: newEndDate }, { transaction: t });
+
+        await Employee.update(
+          {
+            status: "Probation (Extended)",
+            kpi: formattedScore,
+          },
+          {
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              review.employee_id.toLowerCase().trim()
+            ),
+            transaction: t,
+          }
+        );
+      } else if (hr_decision === "approve_appraisal") {
+        await Employee.update(
+          { kpi: formattedScore },
+          {
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              review.employee_id.toLowerCase().trim()
+            ),
+            transaction: t,
+          }
+        );
+        await User.update(
+          { kpi: formattedScore },
+          {
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              review.employee_id.toLowerCase().trim()
+            ),
+            transaction: t,
+          }
+        );
+      } else if (hr_decision === "reject") {
+        await Employee.update(
+          { status: "Probation Rejected" },
+          {
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              review.employee_id.toLowerCase().trim()
+            ),
+            transaction: t,
+          }
+        );
+      }
+
+      await t.commit();
+
+      const refreshed = await PerformanceReview.findByPk(review.id, {
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+
+      return res.json({
+        success: true,
+        message: `HR final decision recorded: ${finalStatus}. Employee record updated successfully!`,
+        review: refreshed,
+      });
+    } catch (err) {
+      await t.rollback();
+      console.error("Submit HR decision error:", err.message);
+      return res.status(500).json({ error: "Failed to submit HR decision" });
+    }
+  },
+
+  async getMyReviews(req, res) {
+    try {
+      const { employee_id } = req.user;
+      const reviews = await PerformanceReview.findAll({
+        where: sequelize.where(
+          sequelize.fn("LOWER", sequelize.col("employee_id")),
+          employee_id.toLowerCase().trim()
+        ),
+        order: [["created_at", "DESC"]],
+        include: [{ model: ReviewQuestionItem, as: "questions" }],
+      });
+      return res.json({ success: true, reviews });
+    } catch (err) {
+      console.error("Get my reviews error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch employee reviews" });
+    }
+  },
+
+  async getPendingReviews(req, res) {
+    try {
+      const { role, employee_id } = req.user;
+      const user = await User.findOne({ where: { employee_id } });
+      const dept = user?.dept || "General";
+
+      let where = {};
+
+      if (["hr", "admin"].includes(role)) {
+        // HR sees all pending
+      } else if (role === "hod") {
+        where = {
+          [Op.or]: [
+            { current_stage: "hod", department: dept },
+            { hod_id: employee_id, current_stage: "hod" },
+          ],
+        };
+      } else if (role === "manager") {
+        where = {
+          [Op.or]: [
+            { current_stage: "manager", manager_id: employee_id },
+            { current_stage: "manager", department: dept },
+          ],
+        };
+      } else if (role === "teamlead") {
+        where = {
+          [Op.or]: [
+            { current_stage: "tl", tl_id: employee_id },
+            { current_stage: "tl", department: dept },
+          ],
+        };
+      } else {
+        where = { employee_id, current_stage: "self" };
+      }
+
+      const reviews = await PerformanceReview.findAll({
+        where,
+        order: [["updated_at", "DESC"]],
+        include: [
+          { model: ReviewQuestionItem, as: "questions" },
+          { model: User, as: "employee", attributes: ["name", "email", "dept", "designation", "profile_photo"] },
+        ],
+      });
+
+      return res.json({ success: true, reviews });
+    } catch (err) {
+      console.error("Get pending reviews error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch pending reviews" });
+    }
+  },
+
+  async getAllReviews(req, res) {
+    try {
+      const { review_type, department, status, stage } = req.query;
+      const where = {};
+      if (review_type && review_type !== "All") where.review_type = review_type;
+      if (department && department !== "All") where.department = department;
+      if (status && status !== "All") where.status = status;
+      if (stage && stage !== "All") where.current_stage = stage;
+
+      const reviews = await PerformanceReview.findAll({
+        where,
+        order: [["created_at", "DESC"]],
+        include: [
+          { model: ReviewQuestionItem, as: "questions" },
+          { model: User, as: "employee", attributes: ["name", "email", "dept", "designation", "profile_photo"] },
+          { model: Employee, as: "employeeProfile", attributes: ["joining_date", "current_salary", "status", "reporting_manager"] },
+        ],
+      });
+
+      return res.json({ success: true, reviews });
+    } catch (err) {
+      console.error("Get all reviews error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch reviews" });
+    }
+  },
+
+  async getReviewById(req, res) {
+    try {
+      const { id } = req.params;
+      const review = await PerformanceReview.findByPk(id, {
+        include: [
+          { model: ReviewQuestionItem, as: "questions" },
+          { model: User, as: "employee", attributes: ["name", "email", "dept", "designation", "profile_photo"] },
+          { model: Employee, as: "employeeProfile" },
+        ],
+      });
+      if (!review) return res.status(404).json({ error: "Review not found" });
+      return res.json({ success: true, review });
+    } catch (err) {
+      console.error("Get review by ID error:", err.message);
+      return res.status(500).json({ error: "Failed to retrieve review" });
+    }
+  },
+
+  async deleteReview(req, res) {
+    try {
+      const { id } = req.params;
+      const review = await PerformanceReview.findByPk(id);
+      if (!review) return res.status(404).json({ error: "Review not found" });
+      await review.destroy();
+      return res.json({ success: true, message: "Review deleted successfully" });
+    } catch (err) {
+      console.error("Delete review error:", err.message);
+      return res.status(500).json({ error: "Failed to delete review" });
+    }
+  },
+
+  async getHierarchyOptions(req, res) {
+    try {
+      const { department } = req.query;
+      const where = { is_active: true };
+      if (department && department !== "All") {
+        where.dept = department;
+      }
+
+      const users = await User.findAll({
+        where,
+        attributes: [
+          "id",
+          "employee_id",
+          "name",
+          "role",
+          "dept",
+          "designation",
+          "employment_type",
+          "status",
+          "reporting_manager",
+        ],
+        order: [["name", "ASC"]],
+      });
+
+      const teamLeads = users.filter((u) => u.role === "teamlead" || u.designation?.toLowerCase().includes("lead"));
+      const managers = users.filter((u) => u.role === "manager" || u.designation?.toLowerCase().includes("manager"));
+      const hods = users.filter((u) => u.role === "hod" || u.designation?.toLowerCase().includes("hod") || u.designation?.toLowerCase().includes("head"));
+
+      return res.json({
+        success: true,
+        teamLeads,
+        managers,
+        hods,
+        allUsers: users,
+      });
+    } catch (err) {
+      console.error("Get hierarchy options error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch hierarchy options" });
+    }
+  },
+
+  async getEligibleEmployees(req, res) {
+    try {
+      const users = await User.findAll({
+        where: { is_active: true },
+        attributes: [
+          "id",
+          "employee_id",
+          "name",
+          "role",
+          "dept",
+          "designation",
+          "status",
+          "employment_type",
+          "joining_date",
+          "reporting_manager",
+          "profile_photo",
+        ],
+        order: [
+          ["employment_type", "ASC"], // Probation first
+          ["name", "ASC"],
+        ],
+      });
+
+      const employees = users.map((u) => ({
+        id: u.id,
+        employee_id: u.employee_id,
+        employee_code: u.employee_id,
+        name: u.name,
+        role: u.role,
+        dept: u.dept,
+        department: u.dept,
+        designation: u.designation,
+        status: u.status || "Active",
+        employment_type: u.employment_type || "Permanent",
+        joining_date: u.joining_date,
+        reporting_manager: u.reporting_manager,
+        profile_photo: u.profile_photo,
+      }));
+
+      return res.json({
+        success: true,
+        employees,
+      });
+    } catch (err) {
+      console.error("Get eligible employees error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch eligible employees" });
     }
   },
 };

@@ -285,11 +285,16 @@ const AttendanceController = {
           }
         });
 
-        // 2. Fetch all schedules in this date window
+        // 2. Fetch schedules in this date window (filter by employee if scoped)
+        const scheduleWhere = {
+          date: { [Op.between]: [startDateStr, endDateStr] }
+        };
+        if (empWhere.employee_id) {
+          scheduleWhere.employee_id = empWhere.employee_id;
+        }
         const schedules = await Schedule.findAll({
-          where: {
-            date: { [Op.between]: [startDateStr, endDateStr] }
-          }
+          where: scheduleWhere,
+          attributes: ["id", "employee_id", "date", "shift_name", "start_time", "end_time", "notes"]
         });
 
         const scheduleMap = {};
@@ -302,7 +307,8 @@ const AttendanceController = {
         const holidays = await Holiday.findAll({
           where: {
             date: { [Op.between]: [startDateStr, endDateStr] }
-          }
+          },
+          attributes: ["id", "name", "date"]
         });
         const holidayMap = {};
         holidays.forEach(h => {

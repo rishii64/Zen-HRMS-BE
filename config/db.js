@@ -35,6 +35,8 @@ const MediclaimClaim = require("../model/mediclaimClaimModel")(sequelize);
 const KpiTemplate = require("../model/kpiTemplateModel")(sequelize);
 const KpiAssignment = require("../model/kpiAssignmentModel")(sequelize);
 const KpiGoalItem = require("../model/kpiGoalItemModel")(sequelize);
+const PerformanceReview = require("../model/performanceReviewModel")(sequelize);
+const ReviewQuestionItem = require("../model/reviewQuestionItemModel")(sequelize);
 const RecruitmentRequisition = require("../model/recruitmentRequisitionModel")(sequelize);
 const RecruitmentCandidate = require("../model/recruitmentCandidateModel")(sequelize);
 const Onboarding = require("../model/onboardingModel")(sequelize);
@@ -266,6 +268,39 @@ KpiGoalItem.belongsTo(KpiAssignment, {
   as: "assignment",
 });
 
+// 11B. PerformanceReview <-> ReviewQuestionItem & User/Employee
+PerformanceReview.hasMany(ReviewQuestionItem, {
+  foreignKey: "review_id",
+  as: "questions",
+  onDelete: "CASCADE",
+});
+ReviewQuestionItem.belongsTo(PerformanceReview, {
+  foreignKey: "review_id",
+  as: "review",
+});
+
+User.hasMany(PerformanceReview, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "performanceReviews",
+});
+PerformanceReview.belongsTo(User, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+
+Employee.hasMany(PerformanceReview, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "performanceReviews",
+});
+PerformanceReview.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employeeProfile",
+});
+
 // 12. RecruitmentRequisition <-> RecruitmentCandidate
 RecruitmentRequisition.hasMany(RecruitmentCandidate, {
   foreignKey: "requisition_id",
@@ -302,6 +337,18 @@ Onboarding.belongsTo(Employee, {
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
+    try {
+      await sequelize.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
+      `);
+    } catch (migErr) {
+      console.warn("Company group columns check note:", migErr.message);
+    }
     // In production, schema is managed via PG_Complete_Schema.sql to prevent lock contention
     if (process.env.NODE_ENV !== "production") {
       try {
@@ -358,6 +405,8 @@ module.exports = {
   KpiTemplate,
   KpiAssignment,
   KpiGoalItem,
+  PerformanceReview,
+  ReviewQuestionItem,
   RecruitmentRequisition,
   RecruitmentCandidate,
   Onboarding,

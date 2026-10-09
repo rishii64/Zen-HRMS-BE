@@ -22,6 +22,7 @@ const router = express.Router();
 // Public routes
 router.post("/register", AuthController.register);
 router.post("/login", AuthController.login);
+router.post("/logout", AuthController.logout);
 router.post("/forgot-password", AuthController.forgotPassword);
 router.post("/verify-otp", AuthController.verifyOTP);
 
@@ -52,9 +53,20 @@ router.post("/employee/:empId/salary", EmployeeController.updateSalaryStructure)
 router.post("/employees/verify-documents", authenticate, authorizeRoles("hr"), EmployeeController.verifyEmployeeDocuments);
 
 // Payroll Management routes
+router.get("/payroll/settings", authenticate, PayrollController.getPayrollSettings);
+router.post("/payroll/settings", authenticate, authorizeRoles("accounts", "admin", "payroll", "hr"), PayrollController.updatePayrollSettings);
+router.get("/payroll/facilities", authenticate, PayrollController.getAllEmployeeFacilities);
+router.post("/payroll/facilities/batch", authenticate, PayrollController.batchUpdateEmployeeFacilities);
+router.get("/payroll/facilities/:employeeId", authenticate, PayrollController.getEmployeeFacilities);
+router.post("/payroll/facilities/:employeeId", authenticate, PayrollController.updateEmployeeFacilities);
+router.put("/payroll/facilities/:employeeId", authenticate, PayrollController.updateEmployeeFacilities);
+router.get("/payroll", PayrollController.getAllPayrolls);
 router.get("/payroll/all", PayrollController.getAllPayrolls);
+router.get("/payroll/summary-sheet", PayrollController.getMonthlySummarySheet);
 router.get("/payroll/data/:employeeId", PayrollController.getPayrollData);
 router.post("/payroll/finalize", PayrollController.finalizePayroll);
+router.post("/payroll/assign-company", PayrollController.assignCompanyLocation);
+router.post("/payroll/disburse-batch", PayrollController.disburseBatch);
 router.get("/payroll/history/:employeeId", PayrollController.getPayrollHistory);
 
 // Detailed Profile Update with Document Upload (supports multiple files)
@@ -172,6 +184,23 @@ router.post("/kpi/team-reviews/:id/evaluate", authenticate, authorizeRoles("hod"
 // HR Admin Calibration & Company-wide view
 router.get("/kpi/all-cycles", authenticate, authorizeRoles("hr", "admin"), KpiController.getAllCompanyKpis);
 router.post("/kpi/calibrate/:id", authenticate, authorizeRoles("hr", "admin"), KpiController.calibrateAndApprove);
+
+// 6-Month Probation & Annual Appraisal Questionnaire Routes
+// Flow: Employee Self -> TL (if avail) -> Manager (if avail) -> HOD -> HR
+router.get("/kpi/reviews/demo-questions", authenticate, KpiController.getDemoQuestions);
+router.get("/kpi/reviews/eligible-employees", authenticate, authorizeRoles("hr", "admin", "hod"), KpiController.getEligibleEmployees);
+router.get("/kpi/reviews/hierarchy-options", authenticate, authorizeRoles("hr", "admin", "hod"), KpiController.getHierarchyOptions);
+router.post("/kpi/reviews/initiate", authenticate, authorizeRoles("hr", "admin"), KpiController.initiateReview);
+router.get("/kpi/reviews/my-reviews", authenticate, KpiController.getMyReviews);
+router.get("/kpi/reviews/pending-reviews", authenticate, authorizeRoles("teamlead", "manager", "hod", "hr", "admin"), KpiController.getPendingReviews);
+router.get("/kpi/reviews/all", authenticate, authorizeRoles("hr", "admin", "hod"), KpiController.getAllReviews);
+router.get("/kpi/reviews/:id", authenticate, KpiController.getReviewById);
+router.post("/kpi/reviews/:id/self-submit", authenticate, KpiController.submitSelfRating);
+router.post("/kpi/reviews/:id/tl-review", authenticate, authorizeRoles("teamlead", "hr", "admin"), KpiController.submitTlReview);
+router.post("/kpi/reviews/:id/manager-review", authenticate, authorizeRoles("manager", "hr", "admin"), KpiController.submitManagerReview);
+router.post("/kpi/reviews/:id/hod-approve", authenticate, authorizeRoles("hod", "hr", "admin"), KpiController.submitHodApproval);
+router.post("/kpi/reviews/:id/hr-decision", authenticate, authorizeRoles("hr", "admin"), KpiController.submitHrDecision);
+router.delete("/kpi/reviews/:id", authenticate, authorizeRoles("hr", "admin"), KpiController.deleteReview);
 
 // ==========================================
 // Recruitment & Hiring Process Routes

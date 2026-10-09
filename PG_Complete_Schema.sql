@@ -79,6 +79,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dept VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS designation VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS current_salary NUMERIC;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS joining_date DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reporting_manager VARCHAR(100) DEFAULT 'N/A';
@@ -194,6 +197,9 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Activ
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS job_role VARCHAR(50) DEFAULT 'employee';
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS dept VARCHAR(100);
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS designation VARCHAR(100);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS current_salary NUMERIC;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS joining_date DATE;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS reporting_manager VARCHAR(100) DEFAULT 'N/A';
@@ -1202,3 +1208,20 @@ CREATE INDEX IF NOT EXISTS idx_schedules_emp_date ON schedules(employee_id, date
 CREATE INDEX IF NOT EXISTS idx_payrolls_emp_month ON payrolls(employee_id, month_year);
 CREATE INDEX IF NOT EXISTS idx_leaves_emp_id ON leaves(employee_id);
 
+
+-- ==========================================================================
+-- FACILITIES & ESI SLAB SETTINGS
+-- ==========================================================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS facilities TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS facilities TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
+
+CREATE TABLE IF NOT EXISTS system_settings (
+  key VARCHAR(100) PRIMARY KEY,
+  value TEXT,
+  "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO system_settings (key, value) VALUES ('global_esi_threshold', '21000') ON CONFLICT (key) DO NOTHING;
+INSERT INTO system_settings (key, value) VALUES ('company_loan_interest_rate', '8.5') ON CONFLICT (key) DO NOTHING;

@@ -73,6 +73,24 @@ module.exports = (sequelize) => {
         allowNull: true,
       },
 
+      group_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        defaultValue: "TATA Company",
+      },
+
+      company_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        defaultValue: "TATA Steel",
+      },
+
+      work_location: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        defaultValue: "Kolkata",
+      },
+
       weekly_off: {
         type: DataTypes.STRING(20),
         allowNull: true,
@@ -280,6 +298,16 @@ module.exports = (sequelize) => {
 
       salary_structure: {
         type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      facilities: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      esi_threshold: {
+        type: DataTypes.NUMERIC,
         allowNull: true,
       },
     },

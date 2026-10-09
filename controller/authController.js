@@ -173,10 +173,13 @@ const AuthController = {
         { expiresIn: "14h" }
       );
 
-      // Set cookie (optional fallback)
+      // Set token cookie
+      const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
       res.cookie("token", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        httpOnly: false,
+        secure: isHttps,
+        sameSite: "lax",
+        path: "/",
         maxAge: 14 * 60 * 60 * 1000 // 14 hours
       });
 
@@ -430,6 +433,17 @@ const AuthController = {
       console.error("Delete user error:", err.message);
       return res.status(500).json({ error: "Failed to delete user" });
     }
+  },
+
+  // POST /api/auth/logout
+  logout(req, res) {
+    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
+    res.clearCookie("token", {
+      path: "/",
+      secure: isHttps,
+      sameSite: "lax"
+    });
+    return res.json({ success: true, message: "Logged out successfully" });
   }
 };
 

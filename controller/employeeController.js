@@ -22,6 +22,16 @@ const resolveTargetEmpId = (req, empId) => {
   return empId;
 };
 
+const getGlobalEsiThreshold = async () => {
+  try {
+    const [rows] = await sequelize.query("SELECT value FROM system_settings WHERE key = 'global_esi_threshold' LIMIT 1");
+    if (rows && rows.length > 0 && rows[0].value) {
+      return parseFloat(rows[0].value) || 21000;
+    }
+  } catch (e) {}
+  return 21000;
+};
+
 const EmployeeController = {
   // GET /api/auth/employees
   async getAllEmployees(req, res) {
@@ -42,6 +52,9 @@ const EmployeeController = {
         current_salary: user.current_salary,
         dept: user.dept,
         designation: user.designation,
+        group_name: user.group_name || "TATA Company",
+        company_name: user.company_name || "TATA Steel",
+        work_location: user.work_location || "Kolkata",
         joining_date: user.joining_date,
         reporting_manager: user.reporting_manager,
         phone_no: user.phone_no,
@@ -65,7 +78,9 @@ const EmployeeController = {
         profile_photo: user.profile_photo,
         profile_pic: user.profile_photo,
         employment_type: user.employment_type || "Permanent",
-        salary_structure: user.salary_structure
+        salary_structure: user.salary_structure,
+        facilities: user.facilities ? (typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities) : null,
+        esi_threshold: user.esi_threshold
       }));
 
       return res.json({ success: true, data: employees });
@@ -94,6 +109,9 @@ const EmployeeController = {
         current_salary,
         dept,
         designation,
+        group_name,
+        company_name,
+        work_location,
         joining_date,
         reporting_manager,
         phone_no,
@@ -146,6 +164,21 @@ const EmployeeController = {
         tabsString = enabled_tabs;
       }
 
+      const isPermanentEmp = (req.body.employment_type || "Permanent").toLowerCase() === "permanent";
+      let facilitiesData = req.body.facilities;
+      if (!facilitiesData) {
+        facilitiesData = {
+          advance: isPermanentEmp,
+          loan: isPermanentEmp,
+          insurance: isPermanentEmp,
+          gratuity: isPermanentEmp
+        };
+      }
+      const facilitiesJson = typeof facilitiesData === "string" ? facilitiesData : JSON.stringify(facilitiesData);
+      const parsedEsiThreshold = (req.body.esi_threshold != null && req.body.esi_threshold !== "" && !req.body.use_global_esi)
+        ? parseFloat(req.body.esi_threshold)
+        : null;
+
       const isActive = status === "Active";
 
       const newUser = await User.create({
@@ -164,13 +197,18 @@ const EmployeeController = {
         current_salary: current_salary ? parseFloat(current_salary) : null,
         dept: dept ? dept.trim() : null,
         designation: designation ? designation.trim() : null,
+        group_name: group_name ? group_name.trim() : "TATA Company",
+        company_name: company_name ? company_name.trim() : "TATA Steel",
+        work_location: work_location ? work_location.trim() : "Kolkata",
         joining_date: joining_date || null,
         reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
         employment_type: req.body.employment_type || "Permanent",
         tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
-        enabled_tabs: tabsString || "1,2,3,4"
+        enabled_tabs: tabsString || "1,2,3,4",
+        facilities: facilitiesJson,
+        esi_threshold: parsedEsiThreshold
       });
 
       // Sync to employees table
@@ -193,6 +231,9 @@ const EmployeeController = {
           job_role: job_role || "employee",
           dept: dept ? dept.trim() : null,
           designation: designation ? designation.trim() : null,
+          group_name: group_name ? group_name.trim() : "TATA Company",
+          company_name: company_name ? company_name.trim() : "TATA Steel",
+          work_location: work_location ? work_location.trim() : "Kolkata",
           current_salary: current_salary ? parseFloat(current_salary) : null,
           joining_date: joining_date || null,
           reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
@@ -200,7 +241,9 @@ const EmployeeController = {
           kpi: kpi ? kpi.trim() : null,
           employment_type: req.body.employment_type || "Permanent",
           tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
-          enabled_tabs: tabsString || "1,2,3,4"
+          enabled_tabs: tabsString || "1,2,3,4",
+          facilities: facilitiesJson,
+          esi_threshold: parsedEsiThreshold
         });
       } catch (err) {
         console.error("Failed to create employee profile in employees table:", err.message);
@@ -310,12 +353,135 @@ const EmployeeController = {
         current_salary: current_salary ? parseFloat(current_salary) : null,
         dept: dept ? dept.trim() : null,
         designation: designation ? designation.trim() : null,
+        ...(req.body.group_name !== undefined ? { group_name: req.body.group_name ? req.body.group_name.trim() : null } : {}),
+        ...(req.body.company_name !== undefined ? { company_name: req.body.company_name ? req.body.company_name.trim() : null } : {}),
+        ...(req.body.work_location !== undefined ? { work_location: req.body.work_location ? req.body.work_location.trim() : null } : {}),
         joining_date: joining_date || null,
         reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
         ...(req.body.employment_type !== undefined ? { employment_type: req.body.employment_type } : {}),
+        ...(req.body.facilities !== undefined ? { facilities: typeof req.body.facilities === "string" ? req.body.facilities : JSON.stringify(req.body.facilities) } : {}),
+        ...(req.body.esi_threshold !== undefined || req.body.use_global_esi !== undefined ? {
+          esi_threshold: req.body.use_global_esi ? null : (req.body.esi_threshold != null && req.body.esi_threshold !== "" ? parseFloat(req.body.esi_threshold) : null)
+        } : {}),
       };
+
+      // Automatically recalculate and sync salary_structure if current_salary is updated
+      if (current_salary != null && !isNaN(parseFloat(current_salary)) && parseFloat(current_salary) > 0) {
+        const newSalary = parseFloat(current_salary);
+        let existingStructure = null;
+        if (user.salary_structure) {
+          try {
+            existingStructure = typeof user.salary_structure === "string" ? JSON.parse(user.salary_structure) : user.salary_structure;
+          } catch {}
+        }
+
+        const globalEsiThreshold = await getGlobalEsiThreshold();
+        const esiThreshold = userUpdateFields.esi_threshold !== undefined
+          ? userUpdateFields.esi_threshold
+          : (user.esi_threshold != null && !isNaN(parseFloat(user.esi_threshold)) ? parseFloat(user.esi_threshold) : globalEsiThreshold);
+        const isEsiEligible = newSalary <= (esiThreshold || globalEsiThreshold);
+
+        let userFac = { advance: true, loan: true, insurance: true, gratuity: true };
+        if (req.body.facilities) {
+          try { userFac = typeof req.body.facilities === "string" ? JSON.parse(req.body.facilities) : req.body.facilities; } catch {}
+        } else if (user.facilities) {
+          try { userFac = typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities; } catch {}
+        } else if (existingStructure && existingStructure.facilities) {
+          userFac = existingStructure.facilities;
+        }
+
+        const newBasic = Math.round(newSalary * 0.45);
+        const newHra = Math.round(newSalary * 0.40);
+        const newConveyance = Math.round(newSalary * 0.05) || 1600;
+        const newMedical = Math.round(newSalary * 0.05) || 1250;
+        const assigned = newBasic + newHra + newConveyance + newMedical;
+        const newAllowance = Math.max(0, newSalary - assigned);
+
+        const existingDeds = existingStructure?.deductions || {};
+        let pt = existingDeds.professional_tax != null ? parseFloat(existingDeds.professional_tax) : (newSalary > 15000 ? 200 : 0);
+        let it = existingDeds.income_tax != null ? parseFloat(existingDeds.income_tax) : 0;
+        let pf = existingDeds.pf != null ? parseFloat(existingDeds.pf) : Math.round(newBasic * 0.12);
+        let esi = 0;
+        let mediclaim = 0;
+
+        if (!userFac.insurance) {
+          esi = 0;
+          mediclaim = 0;
+        } else if (existingStructure && existingStructure.deductions) {
+          if (isEsiEligible) {
+            esi = parseFloat(existingDeds.esi != null ? existingDeds.esi : (existingDeds.mediclaim || 0)) || 0;
+            mediclaim = 0;
+          } else {
+            mediclaim = parseFloat(existingDeds.mediclaim != null ? existingDeds.mediclaim : (existingDeds.esi || 0)) || 0;
+            esi = 0;
+          }
+        } else {
+          if (isEsiEligible) {
+            esi = Math.round(newSalary * 0.0075);
+            mediclaim = 0;
+          } else {
+            mediclaim = newSalary > 25000 ? 750 : 500;
+            esi = 0;
+          }
+        }
+
+        const adj = existingStructure?.adjustments || {};
+        const isPerm = userUpdateFields.employment_type
+          ? String(userUpdateFields.employment_type).toLowerCase() === "permanent"
+          : (user.employment_type || "Permanent").toLowerCase() === "permanent";
+        const empTypeStr = isPerm ? "Permanent" : (userUpdateFields.employment_type || user.employment_type || "Permanent");
+
+        const advDed = isPerm && userFac.advance ? (parseFloat(adj.advance_deduction) || 0) : 0;
+        const loanEmi = isPerm && userFac.loan ? (parseFloat(adj.loan_emi) || 0) : 0;
+        const insDed = isPerm && userFac.insurance ? (parseFloat(adj.insurance_deduction) || 0) : 0;
+        const tds = parseFloat(existingDeds.tds) || 0;
+        const lop = parseFloat(existingDeds.lop) || 0;
+
+        const totalDeductions = pt + it + pf + (isEsiEligible ? esi : mediclaim) + insDed + advDed + loanEmi + tds + lop;
+        const netSalary = Math.max(0, newSalary - totalDeductions);
+
+        const newStructure = {
+          employment_type: empTypeStr,
+          is_permanent: isPerm,
+          earnings: {
+            basic: newBasic,
+            hra: newHra,
+            allowance: newAllowance,
+            conveyance: newConveyance,
+            medical: newMedical
+          },
+          deductions: {
+            professional_tax: pt,
+            income_tax: it,
+            pf,
+            esi: isEsiEligible ? esi : 0,
+            mediclaim: !isEsiEligible ? mediclaim : 0,
+            insurance: insDed,
+            advance_deduction: advDed,
+            loan_emi: loanEmi,
+            tds,
+            lop
+          },
+          adjustments: {
+            ...(adj || {}),
+            is_permanent: isPerm,
+            employment_type: empTypeStr,
+            insurance_deduction: insDed,
+            advance_deduction: advDed,
+            loan_emi: loanEmi
+          },
+          gross_salary: newSalary,
+          total_deductions: totalDeductions,
+          net_salary: netSalary,
+          facilities: userFac,
+          esi_threshold: esiThreshold,
+          updated_at: new Date().toISOString()
+        };
+
+        userUpdateFields.salary_structure = JSON.stringify(newStructure);
+      }
 
       if (document_status !== undefined) {
         userUpdateFields.document_status = document_status;
@@ -358,12 +524,16 @@ const EmployeeController = {
           job_role: job_role || "employee",
           dept: dept ? dept.trim() : null,
           designation: designation ? designation.trim() : null,
+          group_name: userUpdateFields.group_name !== undefined ? userUpdateFields.group_name : (user.group_name || "TATA Company"),
+          company_name: userUpdateFields.company_name !== undefined ? userUpdateFields.company_name : (user.company_name || "TATA Steel"),
+          work_location: userUpdateFields.work_location !== undefined ? userUpdateFields.work_location : (user.work_location || "Kolkata"),
           current_salary: current_salary ? parseFloat(current_salary) : null,
           joining_date: joining_date || null,
           reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
           phone_no: phone_no ? phone_no.trim() : null,
           kpi: kpi ? kpi.trim() : null,
           employment_type: userUpdateFields.employment_type !== undefined ? userUpdateFields.employment_type : (user.employment_type || "Permanent"),
+          salary_structure: userUpdateFields.salary_structure || user.salary_structure || null,
           tabs_enabled: userUpdateFields.tabs_enabled !== undefined ? userUpdateFields.tabs_enabled : user.tabs_enabled,
           enabled_tabs: userUpdateFields.enabled_tabs !== undefined ? userUpdateFields.enabled_tabs : user.enabled_tabs
         };
@@ -387,12 +557,18 @@ const EmployeeController = {
             job_role: job_role || "employee",
             dept: dept ? dept.trim() : null,
             designation: designation ? designation.trim() : null,
+            ...(userUpdateFields.group_name !== undefined ? { group_name: userUpdateFields.group_name } : {}),
+            ...(userUpdateFields.company_name !== undefined ? { company_name: userUpdateFields.company_name } : {}),
+            ...(userUpdateFields.work_location !== undefined ? { work_location: userUpdateFields.work_location } : {}),
             current_salary: current_salary ? parseFloat(current_salary) : null,
             joining_date: joining_date || null,
             reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
             phone_no: phone_no ? phone_no.trim() : null,
             kpi: kpi ? kpi.trim() : null,
           };
+          if (userUpdateFields.salary_structure !== undefined) {
+            empUpdateFields.salary_structure = userUpdateFields.salary_structure;
+          }
           if (userUpdateFields.tabs_enabled !== undefined) {
             empUpdateFields.tabs_enabled = userUpdateFields.tabs_enabled;
           }
@@ -670,7 +846,9 @@ const EmployeeController = {
         doc_exp_cert: user.doc_exp_cert,
         doc_last_company: user.doc_last_company,
         uploaded_documents: user.uploaded_documents,
-        last_company_details: user.last_company_details
+        last_company_details: user.last_company_details,
+        facilities: user.facilities ? (typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities) : null,
+        esi_threshold: user.esi_threshold
       };
 
       return res.json({ success: true, employee, data: employee });
@@ -975,21 +1153,27 @@ const EmployeeController = {
   // GET /api/auth/employees/:empId/salary or /api/salary/:code
   async getSalaryStructure(req, res) {
     try {
-      const empId = req.params.empId || req.params.code || req.query.employee_code;
-      if (!empId) {
+      const rawEmpId = req.params.empId || req.params.code || req.query.employee_code;
+      if (!rawEmpId) {
         return res.status(400).json({ success: false, error: "Employee code is required" });
       }
+      const empId = String(rawEmpId).replace(/^#/, "").trim();
 
       const user = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("employee_id")),
-          empId.toLowerCase().trim()
+          empId.toLowerCase()
         )
       });
 
       if (!user) {
         return res.status(404).json({ success: false, error: "Employee not found" });
       }
+
+      const globalEsiThreshold = await getGlobalEsiThreshold();
+      const esiThreshold = user.esi_threshold != null && !isNaN(parseFloat(user.esi_threshold))
+        ? parseFloat(user.esi_threshold)
+        : globalEsiThreshold;
 
       let parsedStructure = null;
       if (user.salary_structure) {
@@ -1003,6 +1187,15 @@ const EmployeeController = {
       }
 
       const currentSalary = parseFloat(user.current_salary) || 0;
+
+      let facilities = { advance: true, loan: true, insurance: true, gratuity: true };
+      if (user.facilities) {
+        try {
+          facilities = typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities;
+        } catch (e) {}
+      } else if (parsedStructure && parsedStructure.facilities) {
+        facilities = parsedStructure.facilities;
+      }
 
       let basic = 0;
       let da = 0;
@@ -1028,6 +1221,16 @@ const EmployeeController = {
         conveyance = parseFloat(e.conveyance) || 0;
         medical = parseFloat(e.medical) || 0;
 
+        // Check if salary was edited in Employee profile without updating components
+        const structGross = basic + hra + allowance + conveyance + medical;
+        if (currentSalary > 0 && Math.abs(structGross - currentSalary) > 1) {
+          basic = Math.round(currentSalary * 0.45);
+          hra = Math.round(currentSalary * 0.40);
+          conveyance = Math.round(currentSalary * 0.05) || 1600;
+          medical = Math.round(currentSalary * 0.05) || 1250;
+          allowance = Math.max(0, currentSalary - (basic + hra + conveyance + medical));
+        }
+
         professional_tax = parseFloat(d.professional_tax) || 0;
         income_tax = parseFloat(d.income_tax) || 0;
         pf = parseFloat(d.pf) || 0;
@@ -1036,13 +1239,18 @@ const EmployeeController = {
         tds = parseFloat(d.tds) || 0;
         lop = parseFloat(d.lop) || 0;
 
-        const totalSalaryCheck = (basic + hra + allowance + conveyance + medical) || currentSalary;
-        if (totalSalaryCheck <= 21000) {
-          if (!esi && mediclaim) esi = mediclaim;
+        if (!facilities.insurance) {
           mediclaim = 0;
-        } else {
-          if (!mediclaim && esi) mediclaim = esi;
           esi = 0;
+        } else {
+          const totalSalaryCheck = (basic + hra + allowance + conveyance + medical) || currentSalary;
+          if (totalSalaryCheck <= esiThreshold) {
+            if (!esi && mediclaim) esi = mediclaim;
+            mediclaim = 0;
+          } else {
+            if (!mediclaim && esi) mediclaim = esi;
+            esi = 0;
+          }
         }
       } else {
         // Standard default breakdown based on currentSalary (DA removed)
@@ -1055,7 +1263,10 @@ const EmployeeController = {
           allowance = Math.max(0, currentSalary - assigned);
 
           pf = Math.round(basic * 0.12);
-          if (currentSalary <= 21000) {
+          if (!facilities.insurance) {
+            esi = 0;
+            mediclaim = 0;
+          } else if (currentSalary <= esiThreshold) {
             esi = Math.round(currentSalary * 0.0075);
             mediclaim = 0;
           } else {
@@ -1103,7 +1314,7 @@ const EmployeeController = {
       const total_gratuity = isPermanent ? Math.round((15 * basic * tenure_years) / 26) : 0;
 
       const gross_salary = basic + hra + allowance + conveyance + medical;
-      const isEsiEligible = (gross_salary || currentSalary) <= 21000;
+      const isEsiEligible = (gross_salary || currentSalary) <= esiThreshold;
       const total_deductions = professional_tax + income_tax + pf + (isEsiEligible ? esi : mediclaim) + insurance_deduction + advance_deduction + loan_emi + tds + lop;
       const net_salary = Math.max(0, gross_salary - total_deductions);
 
@@ -1114,6 +1325,9 @@ const EmployeeController = {
         current_salary: user.current_salary,
         employment_type: employmentType,
         is_permanent: isPermanent,
+        esi_threshold: esiThreshold,
+        is_global_esi: user.esi_threshold == null,
+        facilities: user.facilities ? (typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities) : { advance: true, loan: true, insurance: true, gratuity: true },
         salary: {
           earnings: {
             basic,
@@ -1148,7 +1362,9 @@ const EmployeeController = {
           },
           gross_salary,
           total_deductions,
-          net_salary
+          net_salary,
+          esi_threshold: esiThreshold,
+          is_global_esi: user.esi_threshold == null
         }
       });
     } catch (err) {
@@ -1160,22 +1376,23 @@ const EmployeeController = {
   // POST /api/auth/employees/:empId/salary or /api/salary/:code
   async updateSalaryStructure(req, res) {
     try {
-      const empId = req.params.empId || req.params.code || req.body.employee_code;
-      if (!empId) {
+      const rawEmpId = req.params.empId || req.params.code || req.body.employee_code;
+      if (!rawEmpId) {
         return res.status(400).json({ success: false, error: "Employee code is required" });
       }
+      const empId = String(rawEmpId).replace(/^#/, "").trim();
 
-      // Check role permissions: only HR or Admin can edit
+      // Check role permissions: HR, Accounts, Payroll, or Admin can edit/restructure
       const userRole = (req.headers.role || (req.user && req.user.role) || req.body.role || "").toLowerCase();
-      const isAuthorized = ["hr", "hrmanager", "admin"].includes(userRole);
+      const isAuthorized = ["hr", "hrmanager", "admin", "accounts", "payroll"].includes(userRole);
       if (!isAuthorized) {
-        return res.status(403).json({ success: false, error: "Access denied: Only HR can edit salary structure" });
+        return res.status(403).json({ success: false, error: "Access denied: Only HR or Accounts can edit salary structure" });
       }
 
       const user = await User.findOne({
         where: sequelize.where(
           sequelize.fn("LOWER", sequelize.col("employee_id")),
-          empId.toLowerCase().trim()
+          empId.toLowerCase()
         )
       });
 
@@ -1215,16 +1432,30 @@ const EmployeeController = {
       const numPf = Math.max(0, parseFloat(pf) || 0);
 
       const gross_salary = numBasic + numHra + numAllowance + numConveyance + numMedical;
-      const isEsiEligible = gross_salary <= 21000;
+      const globalEsiThreshold = await getGlobalEsiThreshold();
+      const esiThreshold = user.esi_threshold != null && !isNaN(parseFloat(user.esi_threshold))
+        ? parseFloat(user.esi_threshold)
+        : globalEsiThreshold;
+      const isEsiEligible = gross_salary <= esiThreshold;
 
-      // Map ESI if total salary <= 21000; Map Mediclaim if total salary > 21000
+      let facilities = { advance: true, loan: true, insurance: true, gratuity: true };
+      if (user.facilities) {
+        try { facilities = typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities; } catch {}
+      } else if (req.body.facilities) {
+        try { facilities = typeof req.body.facilities === "string" ? JSON.parse(req.body.facilities) : req.body.facilities; } catch {}
+      }
+
+      // Map ESI / Mediclaim based on eligibility and insurance facility
       let numEsi = 0;
       let numMediclaim = 0;
-      if (isEsiEligible) {
-        numEsi = Math.max(0, parseFloat(esi || mediclaim) || 0);
+      if (!facilities.insurance) {
+        numEsi = 0;
+        numMediclaim = 0;
+      } else if (isEsiEligible) {
+        numEsi = Math.max(0, parseFloat(esi != null ? esi : mediclaim) || 0);
         numMediclaim = 0;
       } else {
-        numMediclaim = Math.max(0, parseFloat(mediclaim || esi) || 0);
+        numMediclaim = Math.max(0, parseFloat(mediclaim != null ? mediclaim : esi) || 0);
         numEsi = 0;
       }
 
@@ -1235,7 +1466,7 @@ const EmployeeController = {
       // Advance Payment (up to 1 Lakh = 100,000)
       let numAdvanceAmount = 0;
       let numAdvanceDeduction = 0;
-      if (isPermanent) {
+      if (isPermanent && facilities.advance) {
         numAdvanceAmount = Math.min(100000, Math.max(0, parseFloat(advance_amount) || 0));
         numAdvanceDeduction = Math.min(numAdvanceAmount, Math.max(0, parseFloat(advance_deduction) || 0));
       }
@@ -1243,13 +1474,13 @@ const EmployeeController = {
       // Loan (1 to 10 Lakhs = 100,000 to 1,000,000)
       let numLoanAmount = 0;
       let numLoanEmi = 0;
-      if (isPermanent && parseFloat(loan_amount) > 0) {
+      if (isPermanent && facilities.loan && parseFloat(loan_amount) > 0) {
         numLoanAmount = Math.min(1000000, Math.max(100000, parseFloat(loan_amount) || 0));
         numLoanEmi = Math.max(0, parseFloat(loan_emi) || 0);
       }
 
       // Insurance
-      let numInsurance = isPermanent ? Math.max(0, parseFloat(insurance_deduction) || 0) : 0;
+      let numInsurance = isPermanent && facilities.insurance ? Math.max(0, parseFloat(insurance_deduction) || 0) : 0;
 
       const numTds = Math.max(0, parseFloat(tds) || 0);
       const numLop = Math.max(0, parseFloat(lop) || 0);
@@ -1291,6 +1522,8 @@ const EmployeeController = {
         gross_salary,
         total_deductions,
         net_salary,
+        facilities,
+        esi_threshold: esiThreshold,
         updated_at: new Date().toISOString()
       };
 
@@ -1307,7 +1540,7 @@ const EmployeeController = {
         const emp = await Employee.findOne({
           where: sequelize.where(
             sequelize.fn("LOWER", sequelize.col("employee_id")),
-            empId.toLowerCase().trim()
+            empId.toLowerCase()
           )
         });
         if (emp) {

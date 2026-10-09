@@ -9,6 +9,7 @@ const db = require("./config/db");
 const authRoutes = require("./routes/authRoute");
 const authenticate = require("./middleware/Authorization");
 const app = express();
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 5001;
 
 const uploadsDir = path.join(__dirname, "uploads");
@@ -22,6 +23,14 @@ app.use(cors({ origin: true, credentials: true }));
 app.use("/uploads", express.static(uploadsDir));
 app.use("/api/uploads", express.static(uploadsDir));
 app.use("/api/auth/uploads", express.static(uploadsDir));
+
+// Prevent caching on dynamic API routes so edits always reflect immediately
+app.use("/api", (req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  next();
+});
 
 // Health check
 app.get("/", (req, res) => { res.send("Backend working!"); });
