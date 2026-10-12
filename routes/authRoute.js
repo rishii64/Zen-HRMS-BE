@@ -13,6 +13,7 @@ const KpiController = require("../controller/kpiController");
 const RecruitmentController = require("../controller/recruitmentController");
 const OnboardingController = require("../controller/onboardingController");
 const HolidayController = require("../controller/holidayController");
+const AdminTaskController = require("../controller/adminTaskController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -31,9 +32,9 @@ router.post("/change-password", authenticate, AuthController.changePassword);
 router.patch("/users/:id/password", authenticate, AuthController.changePassword);
 
 // Administrative routes (require 'hr' role)
-router.get("/users", authenticate, authorizeRoles("hr"), AuthController.getAllUsers);
-router.patch("/users/:id/status", authenticate, authorizeRoles("hr"), AuthController.toggleStatus);
-router.delete("/users/:id", authenticate, authorizeRoles("hr"), AuthController.deleteUser);
+router.get("/users", authenticate, authorizeRoles("hr", "admin", "ceo", "coo", "hrmanager"), AuthController.getAllUsers);
+router.patch("/users/:id/status", authenticate, authorizeRoles("hr", "admin", "ceo", "coo", "hrmanager"), AuthController.toggleStatus);
+router.delete("/users/:id", authenticate, authorizeRoles("hr", "admin", "ceo", "coo", "hrmanager"), AuthController.deleteUser);
 
 // Employee Management routes (called by HR / Admin)
 router.get("/employees", EmployeeController.getAllEmployees);
@@ -50,7 +51,7 @@ router.get("/employees/:empId/salary", EmployeeController.getSalaryStructure);
 router.post("/employees/:empId/salary", EmployeeController.updateSalaryStructure);
 router.get("/employee/:empId/salary", EmployeeController.getSalaryStructure);
 router.post("/employee/:empId/salary", EmployeeController.updateSalaryStructure);
-router.post("/employees/verify-documents", authenticate, authorizeRoles("hr"), EmployeeController.verifyEmployeeDocuments);
+router.post("/employees/verify-documents", authenticate, authorizeRoles("hr", "admin", "ceo", "coo", "hrmanager"), EmployeeController.verifyEmployeeDocuments);
 
 // Payroll Management routes
 router.get("/payroll/settings", authenticate, PayrollController.getPayrollSettings);
@@ -261,6 +262,13 @@ router.patch("/onboarding/:id/assign-department", authenticate, authorizeRoles("
 
 // Stage E: 6-Month Probation Review & HOD Permanent / Reject Decision
 router.patch("/onboarding/:id/probation-decision", authenticate, authorizeRoles("hod", "hr", "admin", "manager"), OnboardingController.submitProbationDecision);
+
+// Unofficial Admin Operations & Tasks Desk
+router.get("/admin/tasks", authenticate, AdminTaskController.getTasks);
+router.post("/admin/tasks", authenticate, AdminTaskController.createTask);
+router.patch("/admin/tasks/:id/status", authenticate, AdminTaskController.updateTaskStatus);
+router.put("/admin/tasks/:id", authenticate, AdminTaskController.updateTask);
+router.delete("/admin/tasks/:id", authenticate, AdminTaskController.deleteTask);
 
 module.exports = router;
 

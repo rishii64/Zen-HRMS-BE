@@ -5,7 +5,24 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendOTPEmail } = require("../utils/mailer");
 
-const VALID_ROLES = ["hr", "employee", "accounts", "hod"];
+const VALID_ROLES = [
+  "management",
+  "hr",
+  "employee",
+  "accounts",
+  "admin",
+  "it",
+  "hrmanager",
+  "hod",
+  "manager",
+  "teamlead",
+  "payroll",
+  "ceo",
+  "coo",
+  "cfo",
+  "vp",
+  "secretary"
+];
 
 const AuthController = {
   // POST /api/auth/register
@@ -107,45 +124,28 @@ const AuthController = {
     try {
       const { employee_id, password, role } = req.body;
 
-      if (!employee_id || !password || !role) {
-        return res.status(400).json({ error: "Employee ID, password, and role are required" });
+      if (!employee_id || !password) {
+        return res.status(400).json({ error: "Employee ID and password are required" });
       }
 
-      const normalizedRole = role.toLowerCase().trim();
-      if (!VALID_ROLES.includes(normalizedRole)) {
+      const normalizedRole = role ? role.toLowerCase().trim() : "";
+      if (normalizedRole && !VALID_ROLES.includes(normalizedRole)) {
         return res.status(400).json({ error: "Invalid role selected" });
       }
 
-      // Find user by employee_id (Employee Code) or email, and role
+      // Find user by employee_id (Employee Code) or email
       const loginIdentifier = employee_id.toLowerCase().trim();
       const user = await User.findOne({
         where: {
-          [Op.and]: [
-            {
-              [Op.or]: [
-                sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
-                sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
-              ]
-            },
-            sequelize.where(sequelize.fn("LOWER", sequelize.col("role")), normalizedRole)
+          [Op.or]: [
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
           ]
         }
       });
 
       if (!user) {
-        // Check if the employee code or email is registered at all (across any role)
-        const anyUser = await User.findOne({
-          where: {
-            [Op.or]: [
-              sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
-              sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
-            ]
-          }
-        });
-        if (!anyUser) {
-          return res.status(404).json({ error: "User doesn't exist" });
-        }
-        return res.status(401).json({ error: "Invalid Employee ID, password, or role" });
+        return res.status(404).json({ error: "User doesn't exist" });
       }
 
       // Check user active status
@@ -156,7 +156,27 @@ const AuthController = {
       // Verify password
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        return res.status(401).json({ error: "Invalid Employee ID, password, or role" });
+        return res.status(401).json({ error: "Invalid Employee ID or password" });
+      }
+
+      // Role compatibility verification
+      const userRole = (user.role || "employee").toLowerCase().trim();
+      if (normalizedRole) {
+        const isAdminLeadership = ["admin", "management", "ceo", "coo", "cfo", "vp", "secretary"].includes(userRole);
+        const isExactMatch = userRole === normalizedRole;
+        const isEmployeeLogin = normalizedRole === "employee"; // Every person in the organization is an employee
+        const isItMatch = userRole === "it" && ["it", "employee"].includes(normalizedRole);
+        const isManagementMatch = ["management", "ceo", "coo", "cfo", "vp", "secretary"].includes(userRole) && ["management", "admin", "employee"].includes(normalizedRole);
+        const isHodManager = ["hod", "manager", "teamlead"].includes(userRole) && ["hod", "manager", "teamlead", "management", "employee"].includes(normalizedRole);
+        const isFinancePayroll = ["accounts", "payroll"].includes(userRole) && ["accounts", "payroll", "employee"].includes(normalizedRole);
+        const isHrMatch = ["hr", "hrmanager"].includes(userRole) && ["hr", "hrmanager", "employee"].includes(normalizedRole);
+        const isAdminMatch = userRole === "admin" && ["admin", "management", "employee"].includes(normalizedRole);
+
+        if (!isAdminLeadership && !isExactMatch && !isEmployeeLogin && !isItMatch && !isManagementMatch && !isHodManager && !isFinancePayroll && !isHrMatch && !isAdminMatch) {
+          return res.status(401).json({
+            error: `Access Denied: This account is registered as '${user.role}'. Please select the appropriate role to log in.`
+          });
+        }
       }
 
       // Create JWT token

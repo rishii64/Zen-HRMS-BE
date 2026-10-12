@@ -12,9 +12,9 @@ const sequelize = new Sequelize(
     timezone: "+05:30",
     logging: false,
     pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
+      max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 20,
+      min: process.env.DB_POOL_MIN ? parseInt(process.env.DB_POOL_MIN, 10) : 2,
+      acquire: 60000,
       idle: 10000,
     },
   }
@@ -41,6 +41,7 @@ const RecruitmentRequisition = require("../model/recruitmentRequisitionModel")(s
 const RecruitmentCandidate = require("../model/recruitmentCandidateModel")(sequelize);
 const Onboarding = require("../model/onboardingModel")(sequelize);
 const Holiday = require("../model/holidayModel")(sequelize);
+const AdminTask = require("../model/adminTaskModel")(sequelize);
 
 // Model Associations
 
@@ -345,9 +346,27 @@ const connectDB = async () => {
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
+
+        CREATE TABLE IF NOT EXISTS admin_tasks (
+          id SERIAL PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          category VARCHAR(100) NOT NULL DEFAULT 'Facilities & Maintenance',
+          description TEXT,
+          requester_name VARCHAR(150),
+          requester_id VARCHAR(50),
+          dept VARCHAR(100) DEFAULT 'General',
+          priority VARCHAR(50) NOT NULL DEFAULT 'Medium',
+          status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+          due_date DATE,
+          assigned_to VARCHAR(150) DEFAULT 'Admin Team',
+          completed_at TIMESTAMP WITH TIME ZONE,
+          notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
       `);
     } catch (migErr) {
-      console.warn("Company group columns check note:", migErr.message);
+      console.warn("Schema initialization check note:", migErr.message);
     }
     // In production, schema is managed via PG_Complete_Schema.sql to prevent lock contention
     if (process.env.NODE_ENV !== "production") {
@@ -382,6 +401,19 @@ const connectDB = async () => {
       console.warn("Could not seed default holidays:", seedErr.message);
     }
 
+    // Ensure performance indexes exist for high-traffic tables (attendance, schedules, holidays)
+    try {
+      await sequelize.query(`
+        CREATE INDEX IF NOT EXISTS idx_attendance_emp_date ON attendance (employee_id, date);
+        CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance (date);
+        CREATE INDEX IF NOT EXISTS idx_attendance_dept_date ON attendance (dept, date);
+        CREATE INDEX IF NOT EXISTS idx_schedules_emp_date ON schedules (employee_id, date);
+        CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays (date);
+      `);
+    } catch (idxErr) {
+      console.warn("Performance indexing check note:", idxErr.message);
+    }
+
     console.log("PG connected...");
   } catch (err) {
     console.error("Postgres connection error:", err.message);
@@ -411,4 +443,5 @@ module.exports = {
   RecruitmentCandidate,
   Onboarding,
   Holiday,
+  AdminTask,
 };
