@@ -11,7 +11,6 @@ const VALID_ROLES = [
   "employee",
   "accounts",
   "admin",
-  "it",
   "hrmanager",
   "hod",
   "manager",
@@ -160,9 +159,11 @@ const AuthController = {
       }
 
       // Role compatibility verification
-      const userRole = (user.role || "employee").toLowerCase().trim();
+      let userRole = (user.role || "employee").toLowerCase().trim();
+      if (userRole === "employees") userRole = "employee";
+
       if (normalizedRole) {
-        const isAdminLeadership = ["admin", "management", "ceo", "coo", "cfo", "vp", "secretary"].includes(userRole);
+        const isAdminLeadership = ["admin", "management", "ceo", "coo", "cto", "cfo", "vp", "secretary"].includes(userRole);
         const isExactMatch = userRole === normalizedRole;
         const isEmployeeLogin = normalizedRole === "employee"; // Every person in the organization is an employee
         const isItMatch = userRole === "it" && ["it", "employee"].includes(normalizedRole);
@@ -179,13 +180,15 @@ const AuthController = {
         }
       }
 
+      const canonicalRole = userRole === "employees" ? "employee" : userRole;
+
       // Create JWT token
       const token = jwt.sign(
         {
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: canonicalRole,
           dept: user.dept,
           employee_id: user.employee_id,
         },
@@ -211,7 +214,7 @@ const AuthController = {
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: canonicalRole,
           employee_id: user.employee_id,
           employee_code: user.employee_id,
           dept: user.dept,

@@ -414,6 +414,29 @@ const connectDB = async () => {
       console.warn("Performance indexing check note:", idxErr.message);
     }
 
+    // Automatically ensure system role 'employees' is updated to canonical 'employee'
+    try {
+      await sequelize.query(`
+        UPDATE users SET role = 'employee' WHERE LOWER(role) = 'employees';
+        UPDATE employees SET job_role = 'employee' WHERE LOWER(job_role) = 'employees';
+      `);
+    } catch (roleErr) {
+      // ignore
+    }
+
+    // Automatically ensure resignations table has admin approval tracking columns
+    try {
+      await sequelize.query(`
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_id VARCHAR(50);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_name VARCHAR(100);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_decision VARCHAR(50);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_comments TEXT;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_action_date TIMESTAMPTZ;
+      `);
+    } catch (colErr) {
+      // ignore
+    }
+
     console.log("PG connected...");
   } catch (err) {
     console.error("Postgres connection error:", err.message);

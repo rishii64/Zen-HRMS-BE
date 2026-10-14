@@ -932,11 +932,11 @@ const ResignationController = {
       if (isConfirmed) {
         notifications.push({
           id: Date.now(),
-          target: "HR",
-          recipient: "HR Department",
-          type: "HANDOVER_CONFIRMED_READY_FOR_HR",
-          title: "Handover Confirmed Complete - Ready for Final HR Sign-off",
-          message: `Handover for ${resignation.name} has been verified and confirmed complete by ${name || "Assignee"}. The resignation is now unlocked and awaiting final HR approval.`,
+          target: "ADMIN",
+          recipient: "Admin Office",
+          type: "HANDOVER_CONFIRMED_READY_FOR_ADMIN",
+          title: "Handover Confirmed Complete - Ready for Admin Sign-off",
+          message: `Handover for ${resignation.name} has been verified and confirmed complete by ${name || "Assignee"}. The resignation is now awaiting Admin Operations & Kit/Facilities sign-off.`,
           created_at: new Date().toISOString()
         });
 
@@ -946,7 +946,7 @@ const ResignationController = {
           recipient: resignation.name,
           type: "HANDOVER_CONFIRMED",
           title: "Handover Confirmed Complete",
-          message: `Your handover has been verified and confirmed complete by ${name || "Assignee"}. Your resignation has now advanced to HR for final sign-off.`,
+          message: `Your handover has been verified and confirmed complete by ${name || "Assignee"}. Your resignation has now advanced to Admin Operations for kit, facilities and tasks sign-off.`,
           created_at: new Date().toISOString()
         });
 
@@ -955,14 +955,14 @@ const ResignationController = {
           handover_assignee_remarks: remarks || "Handover verified and confirmed in full",
           handover_assignee_confirmed_at: new Date(),
           handover_docs_checklist: Array.isArray(checklist) ? checklist : resignation.handover_docs_checklist,
-          status: "Pending HR Approval",
-          approval_stage: "PENDING_HR",
+          status: "Pending Admin Approval",
+          approval_stage: "PENDING_ADMIN",
           notifications
         });
 
         return res.json({
           success: true,
-          message: "Handover confirmed successfully! Resignation has advanced to HR for final sign-off.",
+          message: "Handover confirmed successfully! Resignation has advanced to Admin for Operations & Kit sign-off.",
           data: resignation
         });
       } else {
@@ -997,6 +997,83 @@ const ResignationController = {
     }
   },
 
+  // PATCH /api/auth/resignation/:id/admin-action
+  async adminReview(req, res) {
+    try {
+      const { id } = req.params;
+      const { decision, comments } = req.body;
+      const { employee_id, name, role } = req.user;
+
+      const isAdminOrHr = role === "admin" || role === "hr" || role === "hrmanager";
+      if (!isAdminOrHr) {
+        return res.status(403).json({ error: "Only Admin (Operations) or HR can perform Admin approval" });
+      }
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const isApproved = decision === "Approved";
+      const nextStatus = isApproved ? "Pending HR Approval" : "Rejected by Admin";
+      const nextStage = isApproved ? "PENDING_HR" : "REJECTED";
+
+      const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
+      if (isApproved) {
+        notifications.push({
+          id: Date.now(),
+          target: "HR",
+          recipient: "HR Department",
+          type: "ADMIN_APPROVAL_COMPLETED",
+          title: "Admin Approval Granted - Ready for Final HR Sign-off",
+          message: `Admin ${name || "Admin"} has approved ${resignation.name}'s resignation (Unofficial tasks, event logistics & joining kit/assets verified). Resignation has advanced to HR for final sign-off.`,
+          created_at: new Date().toISOString()
+        });
+        notifications.push({
+          id: Date.now() + 1,
+          target: "EMPLOYEE",
+          recipient: resignation.name,
+          type: "ADMIN_APPROVED",
+          title: "Admin Approval Granted",
+          message: `Admin ${name || "Admin"} has approved your resignation request. Notes: "${comments || "Admin & Joining Kit Sign-off Complete"}". Now awaiting final HR sign-off.`,
+          created_at: new Date().toISOString()
+        });
+      } else {
+        notifications.push({
+          id: Date.now(),
+          target: "EMPLOYEE",
+          recipient: resignation.name,
+          type: "ADMIN_REJECTED",
+          title: "Resignation Rejected by Admin",
+          message: `Admin ${name || "Admin"} has rejected your resignation request. Reason: ${comments || "Not approved by Admin"}`,
+          created_at: new Date().toISOString()
+        });
+      }
+
+      await resignation.update({
+        status: nextStatus,
+        approval_stage: nextStage,
+        admin_id: employee_id,
+        admin_name: name || "Admin Officer",
+        admin_decision: decision,
+        admin_comments: comments || "",
+        admin_action_date: new Date(),
+        notifications
+      });
+
+      return res.json({
+        success: true,
+        message: isApproved
+          ? "Admin approval granted successfully! Resignation has advanced to HR for final sign-off."
+          : "Resignation has been rejected by Admin.",
+        data: resignation
+      });
+    } catch (err) {
+      console.error("Admin review error:", err.message);
+      return res.status(500).json({ error: "Failed to process Admin review" });
+    }
+  },
+
   // PATCH /api/auth/resignation/:id/hr-action
   async hrReview(req, res) {
     try {
@@ -1004,9 +1081,9 @@ const ResignationController = {
       const { decision, comments, confirmed_lwd } = req.body;
       const { employee_id, name, role } = req.user;
 
-      const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      if (!isHrOrAdmin) {
-        return res.status(403).json({ error: "Only HR Managers or Admins can perform final resignation approval" });
+      const isHr = role === "hr" || role === "hrmanager";
+      if (!isHr) {
+        return res.status(403).json({ error: "Only HR Managers can perform final resignation approval" });
       }
 
       const resignation = await Resignation.findByPk(id);
@@ -1020,6 +1097,13 @@ const ResignationController = {
       if (isApproved && resignation.handover_status && resignation.handover_status !== "CONFIRMED_BY_ASSIGNEE" && resignation.handover_status !== "NOT_ASSIGNED" && !resignation.clearance_raised) {
         return res.status(400).json({
           error: `Cannot grant final HR approval. The resignation is pending handover confirmation by the assigned employee (${resignation.handover_person_name || "Assignee"}). HR can monitor until confirmation is complete.`
+        });
+      }
+
+      // ENFORCE ADMIN APPROVAL: Admin must approve unofficial tasks & joining kit before final HR approval
+      if (isApproved && resignation.status === "Pending Admin Approval" && resignation.admin_decision !== "Approved") {
+        return res.status(400).json({
+          error: "Cannot grant final HR approval. The resignation is pending Admin approval for unofficial tasks & joining kit sign-off."
         });
       }
 

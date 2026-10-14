@@ -10,7 +10,8 @@ const authenticate = (req, res, next) => {
 
   if (!token) {
     if (req.headers.role) {
-      req.user = { role: req.headers.role.toLowerCase(), employee_id: "ADMIN" };
+      const headerRole = req.headers.role.toLowerCase().trim();
+      req.user = { role: headerRole === "employees" ? "employee" : headerRole, employee_id: "ADMIN" };
       return next();
     }
     return res.status(401).json({ error: "Access denied. No token provided." });
@@ -18,6 +19,9 @@ const authenticate = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded && decoded.role && decoded.role.toLowerCase() === "employees") {
+      decoded.role = "employee";
+    }
     req.user = decoded;
     next();
   } catch (error) {
@@ -27,8 +31,14 @@ const authenticate = (req, res, next) => {
 
 // Role-based protection helper
 const authorizeRoles = (...roles) => {
+  const normalizedAllowed = roles.map((r) => {
+    const nr = r.toLowerCase().trim();
+    return nr === "employees" ? "employee" : nr;
+  });
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    const currentRole = (req.user?.role || "").toLowerCase().trim();
+    const effectiveRole = currentRole === "employees" ? "employee" : currentRole;
+    if (!req.user || !normalizedAllowed.includes(effectiveRole)) {
       return res.status(403).json({ error: "Access denied. Insufficient permissions." });
     }
     next();

@@ -112,12 +112,13 @@ router.get("/resignation/employee/:id/history", authenticate, ResignationControl
 router.get("/resignation/:id", authenticate, ResignationController.getResignationById);
 router.post("/resignation/apply", authenticate, ResignationController.applyResignation);
 
-// Hierarchical Multi-Level Approvals: TL -> Manager -> HOD -> HR
+// Hierarchical Multi-Level Approvals: TL -> Manager -> HOD -> Admin -> HR
 router.patch("/resignation/:id/tl-action", authenticate, ResignationController.tlReview);
 router.patch("/resignation/:id/manager-action", authenticate, ResignationController.managerReview);
 router.patch("/resignation/:id/hod-action", authenticate, ResignationController.hodReview);
 router.patch("/resignation/:id/submit-handover", authenticate, ResignationController.submitHandover);
 router.patch("/resignation/:id/confirm-handover", authenticate, ResignationController.confirmHandover);
+router.patch("/resignation/:id/admin-action", authenticate, ResignationController.adminReview);
 router.patch("/resignation/:id/hr-action", authenticate, ResignationController.hrReview);
 
 // Serial Department Clearances & Custom Departments
