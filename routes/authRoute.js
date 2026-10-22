@@ -14,6 +14,8 @@ const RecruitmentController = require("../controller/recruitmentController");
 const OnboardingController = require("../controller/onboardingController");
 const HolidayController = require("../controller/holidayController");
 const AdminTaskController = require("../controller/adminTaskController");
+const HrEventController = require("../controller/hrEventController");
+const TrainingController = require("../controller/trainingController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -30,6 +32,7 @@ router.post("/verify-otp", AuthController.verifyOTP);
 // Protected routes (require valid JWT)
 router.post("/change-password", authenticate, AuthController.changePassword);
 router.patch("/users/:id/password", authenticate, AuthController.changePassword);
+router.post("/acknowledge-notice", authenticate, AuthController.acknowledgeNotice);
 
 // Administrative routes (require 'hr' role)
 router.get("/users", authenticate, authorizeRoles("hr", "admin", "ceo", "coo", "hrmanager"), AuthController.getAllUsers);
@@ -271,5 +274,71 @@ router.patch("/admin/tasks/:id/status", authenticate, AdminTaskController.update
 router.put("/admin/tasks/:id", authenticate, AdminTaskController.updateTask);
 router.delete("/admin/tasks/:id", authenticate, AdminTaskController.deleteTask);
 
+// ==========================================
+// HR Events & Corporate Announcements
+// ==========================================
+router.get("/hr-events", authenticate, HrEventController.getEvents);
+router.get("/hr-events/:id", authenticate, HrEventController.getEventById);
+router.post("/hr-events", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), HrEventController.createEvent);
+router.put("/hr-events/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), HrEventController.updateEvent);
+router.delete("/hr-events/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), HrEventController.deleteEvent);
+router.post("/hr-events/:id/broadcast", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), HrEventController.broadcastEvent);
+
+// ==========================================
+// TRAINING & DEVELOPMENT MODULE
+// ==========================================
+
+// Dashboard & Summary Stats
+router.get("/training/dashboard-stats", authenticate, TrainingController.getTrainingDashboardStats);
+
+// Programs (HR & Departmental)
+router.get("/training/programs", authenticate, TrainingController.getTrainingPrograms);
+router.get("/training/programs/:id", authenticate, TrainingController.getTrainingProgramById);
+router.post("/training/programs", authenticate, upload.single("company_logo"), TrainingController.createTrainingProgram);
+router.put("/training/programs/:id", authenticate, upload.single("company_logo"), TrainingController.updateTrainingProgram);
+router.delete("/training/programs/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TrainingController.deleteTrainingProgram);
+router.patch("/training/programs/:id/review-proposal", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TrainingController.reviewDepartmentalProposal);
+router.post("/training/programs/:programId/logo", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), upload.single("company_logo"), TrainingController.uploadProgramLogo);
+
+// Sessions & Attendance
+router.post("/training/programs/:programId/sessions", authenticate, TrainingController.addSession);
+router.patch("/training/enrollments/:enrollmentId/attendance", authenticate, TrainingController.markAttendance);
+router.post("/training/attendance/bulk", authenticate, TrainingController.bulkMarkAttendance);
+
+// Enrollments & Assignments
+router.post("/training/programs/:programId/assign", authenticate, TrainingController.assignTraining);
+router.get("/training/programs/:programId/enrollments", authenticate, TrainingController.getProgramEnrollments);
+router.get("/training/my-trainings", authenticate, TrainingController.getMyTrainings);
+
+// Post-Training Assessments
+router.get("/training/programs/:programId/assessment", authenticate, TrainingController.getAssessmentForProgram);
+router.post("/training/programs/:programId/assessment", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TrainingController.createOrUpdateAssessment);
+router.post("/training/programs/:programId/assessment/submit", authenticate, TrainingController.submitAssessment);
+router.get("/training/programs/:programId/submissions", authenticate, TrainingController.getSubmissionsForProgram);
+router.post("/training/submissions/:submissionId/evaluate", authenticate, TrainingController.evaluateDescriptiveAnswers);
+router.post("/training/programs/:programId/publish-results", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), upload.single("company_logo"), TrainingController.publishResults);
+
+// Employee Feedback
+router.post("/training/programs/:programId/feedback", authenticate, TrainingController.submitFeedback);
+router.get("/training/programs/:programId/feedback", authenticate, TrainingController.getProgramFeedback);
+
+// Issued Training Certificates
+router.get("/training/certificates/issued", authenticate, TrainingController.getAllIssuedCertificates);
+router.get("/training/certificates/:enrollmentId", authenticate, TrainingController.getCertificateById);
+
+// Employee Upskilling & Certifications
+router.post("/training/certifications", authenticate, upload.single("certificate_file"), TrainingController.submitCertification);
+router.get("/training/certifications/my", authenticate, TrainingController.getMyCertifications);
+router.get("/training/certifications/queue", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TrainingController.getAllCertificationsQueue);
+router.patch("/training/certifications/:id/review", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TrainingController.reviewCertification);
+
+// Onboarding Integration
+router.get("/training/onboarding/:employeeId", authenticate, TrainingController.getOnboardingTrainingStatus);
+router.post("/training/onboarding/:employeeId/assign", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TrainingController.assignOnboardingMandatoryTrainings);
+
+// Reports & Exports
+router.get("/training/reports", authenticate, TrainingController.getTrainingReportsData);
+
 module.exports = router;
+
 

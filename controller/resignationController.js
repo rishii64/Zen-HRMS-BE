@@ -1,6 +1,19 @@
 const { Resignation, User, Employee } = require("../config/db");
 const { Op } = require("sequelize");
 
+const isLeadershipUser = (user = {}) => {
+  const role = (user.role || "").toLowerCase().trim();
+  if (["hod", "manager", "teamlead"].includes(role)) return true;
+  const desig = (user.designation || "").toLowerCase().trim();
+  return (
+    /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(desig) ||
+    desig.includes("team lead") ||
+    desig.includes("tech lead") ||
+    desig.includes("department head") ||
+    desig.includes("head of")
+  );
+};
+
 const DEFAULT_EXIT_QUESTIONS = [
   {
     id: 1,
@@ -205,7 +218,7 @@ const ResignationController = {
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
       const isClearanceDept = role === "accounts" || role === "payroll" || role === "it" || role === "library" || role === "admin";
-      const isLeadOrManager = role === "hod" || role === "manager" || role === "teamlead";
+      const isLeadOrManager = role === "hod" || role === "manager" || role === "teamlead" || isLeadershipUser(req.user);
 
       if (isHrOrAdmin) {
         // HR/Admin has full oversight of all resignations across all stages
@@ -324,7 +337,7 @@ const ResignationController = {
       }
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isLeadOrManager = role === "hod" || role === "manager" || role === "teamlead";
+      const isLeadOrManager = role === "hod" || role === "manager" || role === "teamlead" || isLeadershipUser(req.user);
       const isClearanceDept = role === "accounts" || role === "payroll" || role === "it" || role === "library" || role === "admin";
       const isHandoverAssignee = record.handover_person_id === employee_id;
 
@@ -585,7 +598,7 @@ const ResignationController = {
       const { decision, comments, recommended_lwd } = req.body;
       const { employee_id, name, role } = req.user;
 
-      const isAuthorized = role === "teamlead" || role === "manager" || role === "hod" || role === "hr" || role === "admin";
+      const isAuthorized = role === "teamlead" || role === "manager" || role === "hod" || role === "hr" || role === "admin" || isLeadershipUser(req.user);
       if (!isAuthorized) {
         return res.status(403).json({ error: "Only Team Leads, Managers, or HR can review at the TL stage" });
       }
@@ -658,7 +671,7 @@ const ResignationController = {
       const { decision, comments, recommended_lwd } = req.body;
       const { employee_id, name, role } = req.user;
 
-      const isAuthorized = role === "manager" || role === "hod" || role === "teamlead" || role === "hr" || role === "admin";
+      const isAuthorized = role === "manager" || role === "hod" || role === "teamlead" || role === "hr" || role === "admin" || isLeadershipUser(req.user);
       if (!isAuthorized) {
         return res.status(403).json({ error: "Only Managers, Department Heads, or HR can review at the Manager stage" });
       }
@@ -726,7 +739,7 @@ const ResignationController = {
       } = req.body;
       const { employee_id, name, role } = req.user;
 
-      const isAuthorized = role === "hod" || role === "hr" || role === "admin";
+      const isAuthorized = role === "hod" || role === "hr" || role === "admin" || isLeadershipUser(req.user);
       if (!isAuthorized) {
         return res.status(403).json({ error: "Only Department Heads (HOD) or HR can perform HOD final approval" });
       }

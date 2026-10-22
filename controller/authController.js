@@ -182,15 +182,42 @@ const AuthController = {
 
       const canonicalRole = userRole === "employees" ? "employee" : userRole;
 
-      // Create JWT token
+      // Ensure designation & department are synced from Employee table if needed
+      let userDesignation = user.designation || "";
+      let userDept = user.dept || "";
+      if ((!userDesignation || !userDept) && user.employee_id) {
+        try {
+          const emp = await Employee.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              user.employee_id.toLowerCase().trim()
+            ),
+            attributes: ["designation", "dept", "department"]
+          });
+          if (emp) {
+            if (!userDesignation && emp.designation) {
+              userDesignation = emp.designation;
+              user.designation = userDesignation;
+            }
+            if (!userDept && (emp.dept || emp.department)) {
+              userDept = emp.dept || emp.department;
+              user.dept = userDept;
+            }
+            await user.save().catch(() => {});
+          }
+        } catch (_) {}
+      }
+
+      // Create JWT token including designation for RBAC
       const token = jwt.sign(
         {
           id: user.id,
           name: user.name,
           email: user.email,
           role: canonicalRole,
-          dept: user.dept,
+          dept: userDept || user.dept,
           employee_id: user.employee_id,
+          designation: userDesignation || user.designation || "",
         },
         process.env.JWT_SECRET,
         { expiresIn: "14h" }
@@ -206,10 +233,22 @@ const AuthController = {
         maxAge: 14 * 60 * 60 * 1000 // 14 hours
       });
 
+      // Auto-register attendance check-in on portal login
+      let autoAttendance = null;
+      try {
+        const AttendanceController = require("./attendanceController");
+        if (user.employee_id && AttendanceController.performAutoCheckIn) {
+          autoAttendance = await AttendanceController.performAutoCheckIn(user.employee_id);
+        }
+      } catch (attErr) {
+        console.warn("Auto check-in on login warning:", attErr.message);
+      }
+
       return res.json({
         success: true,
         message: "Login successful",
         token,
+        attendance: autoAttendance,
         user: {
           id: user.id,
           name: user.name,
@@ -217,11 +256,12 @@ const AuthController = {
           role: canonicalRole,
           employee_id: user.employee_id,
           employee_code: user.employee_id,
-          dept: user.dept,
-          designation: user.designation,
+          dept: userDept || user.dept,
+          designation: userDesignation || user.designation || "",
           profile_photo: user.profile_photo,
           tabs_enabled: user.tabs_enabled || false,
-          enabled_tabs: user.enabled_tabs || "1,2,3,4"
+          enabled_tabs: user.enabled_tabs || "1,2,3,4",
+          notice_acknowledged: Boolean(user.notice_acknowledged)
         }
       });
     } catch (err) {
@@ -459,7 +499,28 @@ const AuthController = {
   },
 
   // POST /api/auth/logout
-  logout(req, res) {
+  async logout(req, res) {
+    try {
+      let empId = req.user?.employee_id;
+      if (!empId) {
+        const rawToken = req.cookies?.token || (req.headers.authorization && req.headers.authorization.split(" ")[1]);
+        if (rawToken) {
+          try {
+            const decoded = jwt.verify(rawToken, process.env.JWT_SECRET, { ignoreExpiration: true });
+            empId = decoded?.employee_id;
+          } catch (_) {}
+        }
+      }
+      if (empId) {
+        const AttendanceController = require("./attendanceController");
+        if (AttendanceController.performAutoCheckOut) {
+          await AttendanceController.performAutoCheckOut(empId);
+        }
+      }
+    } catch (outErr) {
+      console.warn("Auto check-out on logout warning:", outErr.message);
+    }
+
     const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
     res.clearCookie("token", {
       path: "/",
@@ -467,6 +528,29 @@ const AuthController = {
       sameSite: "lax"
     });
     return res.json({ success: true, message: "Logged out successfully" });
+  },
+
+  // POST /api/auth/acknowledge-notice
+  async acknowledgeNotice(req, res) {
+    try {
+      const userId = req.user?.id;
+      const employeeId = req.user?.employee_id;
+      if (!userId && !employeeId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      await User.update(
+        { notice_acknowledged: true },
+        {
+          where: userId ? { id: userId } : { employee_id: employeeId }
+        }
+      );
+
+      return res.json({ success: true, message: "Attendance notice acknowledged permanently" });
+    } catch (err) {
+      console.error("Acknowledge notice error:", err.message);
+      return res.status(500).json({ error: "Failed to acknowledge notice" });
+    }
   }
 };
 

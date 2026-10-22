@@ -2,6 +2,19 @@ const { RecruitmentRequisition, RecruitmentCandidate, User } = require("../confi
 const { Op } = require("sequelize");
 const { sendInterviewScheduleEmail } = require("../utils/mailer");
 
+const isDepartmentLeaderUser = (user = {}) => {
+  const role = (user?.role || "").toLowerCase().trim();
+  if (role === "hod" || role === "manager" || role === "teamlead") return true;
+  const desig = (user?.designation || "").toLowerCase().trim();
+  return (
+    /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(desig) ||
+    desig.includes("team lead") ||
+    desig.includes("tech lead") ||
+    desig.includes("department head") ||
+    desig.includes("head of")
+  );
+};
+
 /**
  * Resolves user name, email, dept from token, request body, or DB lookup
  */
@@ -176,9 +189,9 @@ const RecruitmentController = {
       const whereClause = {};
 
       // Role based filtering:
-      // If HOD, show requisitions from their department or raised by them
+      // If HOD / Department Leader, show requisitions from their department or raised by them
       const isExecutiveOrHr = ["hr", "admin", "ceo", "coo", "hrmanager"].includes((role || "").toLowerCase());
-      if (!isExecutiveOrHr && (role || "").toLowerCase() === "hod") {
+      if (!isExecutiveOrHr && isDepartmentLeaderUser(req.user)) {
         whereClause[Op.or] = [
           { hod_id: employee_id },
           { department: dept || "IT" },
@@ -1004,7 +1017,7 @@ const RecruitmentController = {
       const isExecutiveOrHr = ["hr", "admin", "ceo", "coo", "hrmanager"].includes((role || "").toLowerCase());
 
       const reqWhere = {};
-      if (!isExecutiveOrHr && (role || "").toLowerCase() === "hod") {
+      if (!isExecutiveOrHr && isDepartmentLeaderUser(req.user)) {
         reqWhere[Op.or] = [{ hod_id: employee_id }, { department: dept || "IT" }];
       }
 
@@ -1024,7 +1037,7 @@ const RecruitmentController = {
 
       // Candidate counts
       const candidateWhere = {};
-      if (!isExecutiveOrHr && (role || "").toLowerCase() === "hod") {
+      if (!isExecutiveOrHr && isDepartmentLeaderUser(req.user)) {
         // Find matching requisition ids
         const myRequisitions = await RecruitmentRequisition.findAll({
           where: reqWhere,

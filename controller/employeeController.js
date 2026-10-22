@@ -807,6 +807,7 @@ const EmployeeController = {
         role: user.role,
         is_active: user.is_active,
         status: statusValue,
+        employment_type: user.employment_type || "Permanent",
         current_salary: user.current_salary,
         department: user.dept,
         designation: user.designation,

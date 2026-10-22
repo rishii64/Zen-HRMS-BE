@@ -206,7 +206,15 @@ const AttendanceController = {
       // Enforce visibility rules
       let empWhere = { status: { [Op.ne]: "Terminated" } };
 
-      const isSupervisor = role === "hr" || role === "admin" || role === "hrmanager" || role === "hod" || role === "manager" || role === "teamlead";
+      const userDesig = (req.user?.designation || "").toLowerCase().trim();
+      const isLeadershipDesig =
+        /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(userDesig) ||
+        userDesig.includes("team lead") ||
+        userDesig.includes("tech lead") ||
+        userDesig.includes("department head") ||
+        userDesig.includes("head of");
+
+      const isSupervisor = role === "hr" || role === "admin" || role === "hrmanager" || role === "hod" || role === "manager" || role === "teamlead" || isLeadershipDesig;
       if (scope === "my" || emp_id) {
         const targetEmpId = (emp_id && isSupervisor) ? emp_id : employee_id;
         const cleanEmpId = targetEmpId ? String(targetEmpId).trim() : "";
@@ -220,7 +228,7 @@ const AttendanceController = {
           whereClause.dept = { [Op.iLike]: cleanDept };
           empWhere.dept = { [Op.iLike]: cleanDept };
         }
-      } else if (role === "hod" || role === "accounts" || role === "manager" || role === "payroll") {
+      } else if (role === "hod" || role === "accounts" || role === "manager" || role === "payroll" || isLeadershipDesig) {
         const filterDept = (dept && dept !== "All") ? dept : (resolvedDept && resolvedDept !== "Other" && resolvedDept !== "General" ? resolvedDept : null);
         if (filterDept) {
           const cleanDept = String(filterDept).trim();
@@ -544,67 +552,131 @@ const AttendanceController = {
     }
   },
 
+  // Programmatic / automated check-in logic
+  async performAutoCheckIn(employee_id) {
+    if (!employee_id) return null;
+    const istNow = getISTParts();
+    const today = istNow.dateStr;
+    const utcToday = new Date().toISOString().split("T")[0];
+    const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
+
+    const user = await User.findOne({
+      where: sequelize.where(
+        sequelize.fn("LOWER", sequelize.col("employee_id")),
+        employee_id.toLowerCase().trim()
+      )
+    });
+    if (!user) return null;
+
+    let record = await Attendance.findOne({
+      where: {
+        employee_id: user.employee_id,
+        date: { [Op.or]: [today, utcToday] },
+      },
+    });
+
+    if (record && record.check_in && record.check_in !== "—") {
+      const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+      return { success: true, message: "Already checked in today", record: responseRecord, alreadyCheckedIn: true };
+    }
+
+    // Check shift timing and determine if on-time (Present) or late (Late Present) in IST
+    const shiftInfo = await resolveShiftAndStatus(user.employee_id, today, utcToday, new Date());
+    const status = shiftInfo.status;
+    const late_count = shiftInfo.late_count;
+
+    const resolvedDept = user.dept || ((user.role === "hr" || user.role === "hrmanager") ? "HR" : "Other");
+
+    if (!record) {
+      record = await Attendance.create({
+        employee_id: user.employee_id,
+        name: user.name,
+        dept: resolvedDept,
+        date: today,
+        check_in: timeStr,
+        status,
+        late_count,
+      });
+    } else {
+      await record.update({
+        date: today,
+        check_in: timeStr,
+        status,
+        late_count,
+      });
+    }
+
+    const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+    responseRecord.shift_name = shiftInfo.shift_name;
+    responseRecord.shift_start = shiftInfo.shift_start;
+    responseRecord.shift_end = shiftInfo.shift_end;
+
+    return {
+      success: true,
+      message: `Checked in successfully at ${timeStr} (${status === "Present" ? "On Time" : "Late"})`,
+      record: responseRecord,
+      newCheckIn: true,
+    };
+  },
+
+  // Programmatic / automated check-out logic
+  async performAutoCheckOut(employee_id) {
+    if (!employee_id) return null;
+    const istNow = getISTParts();
+    const today = istNow.dateStr;
+    const utcToday = new Date().toISOString().split("T")[0];
+    const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
+
+    const record = await Attendance.findOne({
+      where: {
+        [Op.and]: [
+          sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("employee_id")),
+            employee_id.toLowerCase().trim()
+          ),
+          { date: { [Op.or]: [today, utcToday] } }
+        ]
+      },
+    });
+
+    if (!record || !record.check_in || record.check_in === "—") {
+      return { success: false, error: "Please check in before checking out" };
+    }
+
+    if (record.check_out && record.check_out !== "—") {
+      const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+      return { success: true, message: "Already checked out today", record: responseRecord, alreadyCheckedOut: true };
+    }
+
+    // Calculate work hours using IST timestamps
+    const inDate = new Date(`${record.date}T${record.check_in}+05:30`);
+    const outDate = new Date(`${today}T${timeStr}+05:30`);
+    const diffMs = Math.max(0, outDate - inDate);
+    const diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+
+    await record.update({
+      check_out: timeStr,
+      work_hours: diffHrs,
+    });
+
+    const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+    return {
+      success: true,
+      message: `Checked out successfully at ${timeStr}. Work duration: ${diffHrs} hours.`,
+      record: responseRecord,
+      newCheckOut: true,
+    };
+  },
+
   // POST /api/auth/attendance/check-in
   async checkIn(req, res) {
     try {
       const { employee_id } = req.user;
-      const istNow = getISTParts();
-      const today = istNow.dateStr;
-      const utcToday = new Date().toISOString().split("T")[0];
-      const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
-
-      const user = await User.findOne({ where: { employee_id } });
-      if (!user) {
+      const result = await AttendanceController.performAutoCheckIn(employee_id);
+      if (!result) {
         return res.status(404).json({ error: "User profile not found" });
       }
-
-      let record = await Attendance.findOne({
-        where: {
-          employee_id,
-          date: { [Op.or]: [today, utcToday] },
-        },
-      });
-
-      if (record && record.check_in) {
-        return res.status(400).json({ error: "Already checked in today" });
-      }
-
-      // Check shift timing and determine if on-time (Present) or late (Late Present) in IST
-      const shiftInfo = await resolveShiftAndStatus(employee_id, today, utcToday, new Date());
-      const status = shiftInfo.status;
-      const late_count = shiftInfo.late_count;
-
-      const resolvedDept = user.dept || ((user.role === "hr" || user.role === "hrmanager") ? "HR" : "Other");
-
-      if (!record) {
-        record = await Attendance.create({
-          employee_id,
-          name: user.name,
-          dept: resolvedDept,
-          date: today,
-          check_in: timeStr,
-          status,
-          late_count,
-        });
-      } else {
-        await record.update({
-          date: today,
-          check_in: timeStr,
-          status,
-          late_count,
-        });
-      }
-
-      const responseRecord = record.toJSON ? record.toJSON() : { ...record };
-      responseRecord.shift_name = shiftInfo.shift_name;
-      responseRecord.shift_start = shiftInfo.shift_start;
-      responseRecord.shift_end = shiftInfo.shift_end;
-
-      return res.json({
-        success: true,
-        message: `Checked in successfully at ${timeStr} (${status === "Present" ? "On Time" : "Late"})`,
-        record: responseRecord,
-      });
+      return res.json(result);
     } catch (err) {
       console.error("Check-in error:", err.message);
       return res.status(500).json({ error: "Failed to record check-in" });
@@ -615,42 +687,14 @@ const AttendanceController = {
   async checkOut(req, res) {
     try {
       const { employee_id } = req.user;
-      const istNow = getISTParts();
-      const today = istNow.dateStr;
-      const utcToday = new Date().toISOString().split("T")[0];
-      const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
-
-      const record = await Attendance.findOne({
-        where: {
-          employee_id,
-          date: { [Op.or]: [today, utcToday] },
-        },
-      });
-
-      if (!record || !record.check_in) {
-        return res.status(400).json({ error: "Please check in before checking out" });
+      const result = await AttendanceController.performAutoCheckOut(employee_id);
+      if (!result) {
+        return res.status(404).json({ error: "User profile not found" });
       }
-
-      if (record.check_out) {
-        return res.status(400).json({ error: "Already checked out today" });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
       }
-
-      // Calculate work hours using IST timestamps
-      const inDate = new Date(`${record.date}T${record.check_in}+05:30`);
-      const outDate = new Date(`${today}T${timeStr}+05:30`);
-      const diffMs = Math.max(0, outDate - inDate);
-      const diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
-
-      await record.update({
-        check_out: timeStr,
-        work_hours: diffHrs,
-      });
-
-      return res.json({
-        success: true,
-        message: `Checked out successfully at ${timeStr}. Work duration: ${diffHrs} hours.`,
-        record,
-      });
+      return res.json(result);
     } catch (err) {
       console.error("Check-out error:", err.message);
       return res.status(500).json({ error: "Failed to record check-out" });
@@ -678,7 +722,14 @@ const AttendanceController = {
       }
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager";
+      const userDesig = (req.user?.designation || "").toLowerCase().trim();
+      const isLeadershipDesig =
+        /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(userDesig) ||
+        userDesig.includes("team lead") ||
+        userDesig.includes("tech lead") ||
+        userDesig.includes("department head") ||
+        userDesig.includes("head of");
+      const isHodOrManager = role === "hod" || role === "manager" || isLeadershipDesig;
 
       if (!isHrOrAdmin && !isHodOrManager) {
         return res.status(403).json({ error: "Only HR, Admin, or Team Leads can mark attendance manually" });

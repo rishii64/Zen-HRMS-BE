@@ -1225,3 +1225,193 @@ CREATE TABLE IF NOT EXISTS system_settings (
 
 INSERT INTO system_settings (key, value) VALUES ('global_esi_threshold', '21000') ON CONFLICT (key) DO NOTHING;
 INSERT INTO system_settings (key, value) VALUES ('company_loan_interest_rate', '8.5') ON CONFLICT (key) DO NOTHING;
+
+-- ==========================================================================
+-- TRAINING & DEVELOPMENT MODULE TABLES & INDEXES
+-- ==========================================================================
+
+CREATE TABLE IF NOT EXISTS training_programs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code VARCHAR(50) NOT NULL UNIQUE,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  objectives TEXT,
+  type VARCHAR(50) NOT NULL DEFAULT 'HR',
+  category VARCHAR(100) NOT NULL DEFAULT 'Technical',
+  delivery_mode VARCHAR(50) NOT NULL DEFAULT 'Offline',
+  department VARCHAR(100),
+  target_audience_type VARCHAR(50) NOT NULL DEFAULT 'ALL',
+  target_employee_ids JSONB DEFAULT '[]'::jsonb,
+  is_mandatory BOOLEAN DEFAULT false,
+  is_onboarding_mandatory BOOLEAN DEFAULT false,
+  duration_hours FLOAT DEFAULT 2.0,
+  completion_criteria TEXT,
+  trainer_type VARCHAR(50) DEFAULT 'INTERNAL',
+  trainer_employee_id VARCHAR(50),
+  trainer_name VARCHAR(150),
+  trainer_email VARCHAR(255),
+  trainer_bio TEXT,
+  venue TEXT,
+  meeting_link TEXT,
+  session_instructions TEXT,
+  learning_materials JSONB DEFAULT '[]'::jsonb,
+  status VARCHAR(50) NOT NULL DEFAULT 'Published',
+  proposal_status VARCHAR(50) NOT NULL DEFAULT 'Approved',
+  rejection_reason TEXT,
+  created_by_id VARCHAR(50),
+  created_by_name VARCHAR(150),
+  created_by_role VARCHAR(50),
+  approved_by_id VARCHAR(50),
+  approved_by_name VARCHAR(150),
+  approved_at TIMESTAMPTZ,
+  start_date DATE,
+  end_date DATE,
+  due_date DATE,
+  capacity INTEGER DEFAULT 50,
+  assessment_required BOOLEAN DEFAULT false,
+  feedback_required BOOLEAN DEFAULT true,
+  certificate_provided BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS training_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_id UUID NOT NULL REFERENCES training_programs(id) ON DELETE CASCADE,
+  batch_name VARCHAR(100) NOT NULL DEFAULT 'Batch 1',
+  session_date DATE NOT NULL,
+  start_time VARCHAR(50) NOT NULL DEFAULT '10:00 AM',
+  end_time VARCHAR(50) NOT NULL DEFAULT '12:00 PM',
+  venue_or_link TEXT,
+  trainer_name VARCHAR(150),
+  capacity INTEGER DEFAULT 50,
+  status VARCHAR(50) NOT NULL DEFAULT 'Scheduled',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS training_enrollments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_id UUID NOT NULL REFERENCES training_programs(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES training_sessions(id) ON DELETE SET NULL,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(150) NOT NULL,
+  employee_email VARCHAR(255),
+  department VARCHAR(100),
+  enrollment_type VARCHAR(50) NOT NULL DEFAULT 'MANUAL_ASSIGNMENT',
+  attendance_status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+  attendance_marked_at TIMESTAMPTZ,
+  attendance_marked_by VARCHAR(100),
+  attendance_notes TEXT,
+  completion_status VARCHAR(50) NOT NULL DEFAULT 'Not Started',
+  completed_at TIMESTAMPTZ,
+  assessment_status VARCHAR(50) NOT NULL DEFAULT 'Not Applicable',
+  assessment_score FLOAT,
+  assessment_attempts_used INTEGER DEFAULT 0,
+  feedback_submitted BOOLEAN DEFAULT false,
+  certificate_issued BOOLEAN DEFAULT false,
+  certificate_number VARCHAR(100),
+  certificate_url TEXT,
+  certificate_issued_at TIMESTAMPTZ,
+  due_date DATE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_program_employee UNIQUE(program_id, employee_id)
+);
+
+CREATE TABLE IF NOT EXISTS training_assessments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_id UUID NOT NULL UNIQUE REFERENCES training_programs(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  instructions TEXT,
+  duration_minutes INTEGER DEFAULT 30,
+  total_marks FLOAT DEFAULT 100,
+  pass_percentage FLOAT DEFAULT 60,
+  max_attempts INTEGER DEFAULT 2,
+  questions JSONB DEFAULT '[]'::jsonb,
+  is_active BOOLEAN DEFAULT true,
+  allow_retake BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS training_assessment_submissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assessment_id UUID NOT NULL REFERENCES training_assessments(id) ON DELETE CASCADE,
+  program_id UUID NOT NULL,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(150) NOT NULL,
+  attempt_number INTEGER DEFAULT 1,
+  answers JSONB DEFAULT '[]'::jsonb,
+  auto_evaluated_score FLOAT DEFAULT 0,
+  manual_evaluated_score FLOAT DEFAULT 0,
+  total_score FLOAT DEFAULT 0,
+  percentage FLOAT DEFAULT 0,
+  pass_status VARCHAR(50) DEFAULT 'Pending Evaluation',
+  requires_manual_grading BOOLEAN DEFAULT false,
+  evaluated_by_id VARCHAR(50),
+  evaluated_by_name VARCHAR(150),
+  evaluated_at TIMESTAMPTZ,
+  is_published BOOLEAN DEFAULT false,
+  published_at TIMESTAMPTZ,
+  published_by VARCHAR(150),
+  started_at TIMESTAMPTZ,
+  submitted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS training_feedbacks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_id UUID NOT NULL REFERENCES training_programs(id) ON DELETE CASCADE,
+  enrollment_id UUID REFERENCES training_enrollments(id) ON DELETE SET NULL,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(150),
+  content_quality_rating INTEGER NOT NULL DEFAULT 5,
+  trainer_effectiveness_rating INTEGER NOT NULL DEFAULT 5,
+  relevance_to_job_rating INTEGER NOT NULL DEFAULT 5,
+  overall_satisfaction_rating INTEGER NOT NULL DEFAULT 5,
+  suggestions TEXT,
+  is_anonymous BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_certifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(150) NOT NULL,
+  department VARCHAR(100),
+  source_type VARCHAR(50) NOT NULL DEFAULT 'EXTERNAL',
+  internal_program_id UUID REFERENCES training_programs(id) ON DELETE SET NULL,
+  course_name VARCHAR(255) NOT NULL,
+  provider_institution VARCHAR(255) NOT NULL,
+  skills_acquired TEXT,
+  start_date DATE,
+  completion_date DATE NOT NULL,
+  duration_hours FLOAT DEFAULT 0,
+  credential_id VARCHAR(150),
+  verification_url TEXT,
+  issue_date DATE,
+  expiry_date DATE,
+  certificate_file_url TEXT,
+  certificate_file_name VARCHAR(255),
+  status VARCHAR(50) NOT NULL DEFAULT 'Submitted',
+  is_verified BOOLEAN DEFAULT false,
+  reviewed_by_id VARCHAR(50),
+  reviewed_by_name VARCHAR(150),
+  reviewed_at TIMESTAMPTZ,
+  review_comments TEXT,
+  rejection_reason TEXT,
+  history JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_training_programs_type_status ON training_programs(type, status);
+CREATE INDEX IF NOT EXISTS idx_training_enrollments_emp ON training_enrollments(employee_id);
+CREATE INDEX IF NOT EXISTS idx_training_enrollments_prog ON training_enrollments(program_id);
+CREATE INDEX IF NOT EXISTS idx_training_submissions_prog_emp ON training_assessment_submissions(program_id, employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_certs_emp ON employee_certifications(employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_certs_status ON employee_certifications(status);
+

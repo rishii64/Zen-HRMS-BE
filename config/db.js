@@ -42,6 +42,14 @@ const RecruitmentCandidate = require("../model/recruitmentCandidateModel")(seque
 const Onboarding = require("../model/onboardingModel")(sequelize);
 const Holiday = require("../model/holidayModel")(sequelize);
 const AdminTask = require("../model/adminTaskModel")(sequelize);
+const HrEvent = require("../model/hrEventModel")(sequelize);
+const TrainingProgram = require("../model/trainingProgramModel")(sequelize);
+const TrainingSession = require("../model/trainingSessionModel")(sequelize);
+const TrainingEnrollment = require("../model/trainingEnrollmentModel")(sequelize);
+const TrainingAssessment = require("../model/trainingAssessmentModel")(sequelize);
+const AssessmentSubmission = require("../model/assessmentSubmissionModel")(sequelize);
+const TrainingFeedback = require("../model/trainingFeedbackModel")(sequelize);
+const EmployeeCertification = require("../model/employeeCertificationModel")(sequelize);
 
 // Model Associations
 
@@ -335,6 +343,94 @@ Onboarding.belongsTo(Employee, {
   as: "employee",
 });
 
+// 14. Training & Development Module Associations
+TrainingProgram.hasMany(TrainingSession, {
+  foreignKey: "program_id",
+  as: "sessions",
+  onDelete: "CASCADE",
+});
+TrainingSession.belongsTo(TrainingProgram, {
+  foreignKey: "program_id",
+  as: "program",
+});
+
+TrainingProgram.hasMany(TrainingEnrollment, {
+  foreignKey: "program_id",
+  as: "enrollments",
+  onDelete: "CASCADE",
+});
+TrainingEnrollment.belongsTo(TrainingProgram, {
+  foreignKey: "program_id",
+  as: "program",
+});
+
+TrainingSession.hasMany(TrainingEnrollment, {
+  foreignKey: "session_id",
+  as: "sessionEnrollments",
+  onDelete: "SET NULL",
+});
+TrainingEnrollment.belongsTo(TrainingSession, {
+  foreignKey: "session_id",
+  as: "session",
+});
+
+TrainingProgram.hasOne(TrainingAssessment, {
+  foreignKey: "program_id",
+  as: "assessment",
+  onDelete: "CASCADE",
+});
+TrainingAssessment.belongsTo(TrainingProgram, {
+  foreignKey: "program_id",
+  as: "program",
+});
+
+TrainingAssessment.hasMany(AssessmentSubmission, {
+  foreignKey: "assessment_id",
+  as: "submissions",
+  onDelete: "CASCADE",
+});
+AssessmentSubmission.belongsTo(TrainingAssessment, {
+  foreignKey: "assessment_id",
+  as: "assessment",
+});
+
+TrainingProgram.hasMany(TrainingFeedback, {
+  foreignKey: "program_id",
+  as: "feedbacks",
+  onDelete: "CASCADE",
+});
+TrainingFeedback.belongsTo(TrainingProgram, {
+  foreignKey: "program_id",
+  as: "program",
+});
+
+Employee.hasMany(TrainingEnrollment, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "trainingEnrollments",
+});
+TrainingEnrollment.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employeeProfile",
+});
+
+Employee.hasMany(EmployeeCertification, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "certificationsList",
+});
+EmployeeCertification.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employeeProfile",
+});
+
+EmployeeCertification.belongsTo(TrainingProgram, {
+  foreignKey: "internal_program_id",
+  as: "internalProgram",
+});
+
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
@@ -361,6 +457,29 @@ const connectDB = async () => {
           assigned_to VARCHAR(150) DEFAULT 'Admin Team',
           completed_at TIMESTAMP WITH TIME ZONE,
           notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS hr_events (
+          id SERIAL PRIMARY KEY,
+          company_name VARCHAR(150) NOT NULL DEFAULT 'TATA Steel',
+          branch_location VARCHAR(150) NOT NULL DEFAULT 'Kolkata HQ',
+          address TEXT,
+          event_name VARCHAR(255) NOT NULL,
+          event_category VARCHAR(100) NOT NULL DEFAULT 'Event',
+          event_date DATE NOT NULL,
+          start_time VARCHAR(50) DEFAULT '10:00 AM',
+          end_time VARCHAR(50) DEFAULT '01:00 PM',
+          content TEXT NOT NULL,
+          sign_off VARCHAR(100) NOT NULL DEFAULT 'HR Team',
+          target_audience VARCHAR(100) NOT NULL DEFAULT 'All Employees',
+          status VARCHAR(50) NOT NULL DEFAULT 'Draft',
+          created_by_id VARCHAR(50),
+          created_by_name VARCHAR(150),
+          created_by_role VARCHAR(50),
+          emails_sent_count INTEGER NOT NULL DEFAULT 0,
+          sent_at TIMESTAMP WITH TIME ZONE,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
@@ -401,6 +520,34 @@ const connectDB = async () => {
       console.warn("Could not seed default holidays:", seedErr.message);
     }
 
+    // Seed sample initial HR event if none exist
+    try {
+      const eCount = await HrEvent.count();
+      if (eCount === 0) {
+        await HrEvent.create({
+          company_name: "TATA Steel",
+          branch_location: "Kolkata HQ (Main Campus)",
+          address: "Auditorium Hall 1, 5th Floor, Tower B, Salt Lake Sector V, Kolkata 700091",
+          event_name: "Annual Corporate Townhall & Tech Innovation Showcase 2026",
+          event_category: "Townhall",
+          event_date: "2026-10-28",
+          start_time: "10:30 AM",
+          end_time: "01:30 PM",
+          content: "We cordially invite all company employees to the Annual Corporate Townhall 2026! Agenda includes executive keynote by the leadership team, quarterly business performance review, employee milestone recognitions, and preview of upcoming enterprise initiatives followed by lunch & networking.",
+          sign_off: "HR Team",
+          target_audience: "All Employees",
+          status: "Sent",
+          created_by_name: "HR Operations Desk",
+          created_by_role: "hr",
+          emails_sent_count: 5,
+          sent_at: new Date(),
+        });
+        console.log("Initial default HR event seeded.");
+      }
+    } catch (eventSeedErr) {
+      console.warn("Could not seed default HR event:", eventSeedErr.message);
+    }
+
     // Ensure performance indexes exist for high-traffic tables (attendance, schedules, holidays)
     try {
       await sequelize.query(`
@@ -437,6 +584,157 @@ const connectDB = async () => {
       // ignore
     }
 
+    // Seed initial training programs if none exist
+    try {
+      const tpCount = await TrainingProgram.count();
+      if (tpCount === 0) {
+        const poshProgram = await TrainingProgram.create({
+          code: "TRN-2026-001",
+          title: "Corporate POSH & Workplace Ethics 2026",
+          description: "Comprehensive annual compliance training on Prevention of Sexual Harassment (POSH), workplace ethics, diversity & inclusion, and respectful corporate communication.",
+          objectives: "Understand legal definitions of harassment, ICC complaint procedure, gender sensitivity, bystander intervention, and maintaining a dignified professional workspace.",
+          type: "HR",
+          category: "Compliance",
+          delivery_mode: "Blended",
+          department: null,
+          target_audience_type: "ALL",
+          is_mandatory: true,
+          is_onboarding_mandatory: true,
+          duration_hours: 3.0,
+          completion_criteria: "Complete interactive session attendance and achieve at least 70% in the post-training assessment.",
+          trainer_type: "INTERNAL",
+          trainer_name: "Anita Sharma (Legal & Compliance)",
+          trainer_email: "anita.sharma@tata.com",
+          venue: "Conference Room A, 4th Floor, Kolkata HQ",
+          meeting_link: "https://meet.google.com/xyz-posh-2026",
+          session_instructions: "Please review the attached POSH handbook before attending. Assessment will unlock immediately after session attendance.",
+          learning_materials: [
+            { name: "POSH Policy Handbook 2026.pdf", type: "pdf", url: "/api/uploads/posh_handbook.pdf" },
+            { name: "ICC Members Contact & Guidelines.pdf", type: "pdf", url: "/api/uploads/icc_guidelines.pdf" }
+          ],
+          status: "Published",
+          proposal_status: "Approved",
+          created_by_name: "HR Operations Desk",
+          created_by_role: "hr",
+          start_date: "2026-10-25",
+          end_date: "2026-10-27",
+          due_date: "2026-11-15",
+          capacity: 100,
+          assessment_required: true,
+          feedback_required: true,
+          certificate_provided: true,
+        });
+
+        // Seed session
+        await TrainingSession.create({
+          program_id: poshProgram.id,
+          batch_name: "Cohort 1 - Morning Batch",
+          session_date: "2026-10-25",
+          start_time: "10:30 AM",
+          end_time: "01:30 PM",
+          venue_or_link: "Conference Room A / GMeet Live",
+          trainer_name: "Anita Sharma",
+          capacity: 50,
+          status: "Scheduled",
+        });
+
+        // Seed assessment
+        await TrainingAssessment.create({
+          program_id: poshProgram.id,
+          title: "POSH & Workplace Conduct Certification Assessment 2026",
+          instructions: "Answer all questions. Assessment includes Multiple Choice, True/False, and short scenario-based questions. Passing percentage is 70%.",
+          duration_minutes: 25,
+          total_marks: 30,
+          pass_percentage: 70,
+          max_attempts: 3,
+          questions: [
+            {
+              id: "q_1",
+              type: "MCQ",
+              question: "Under the POSH Act, what is the statutory time period within which an aggrieved woman can file a written complaint to the Internal Committee (IC)?",
+              options: [
+                "Within 1 month from the date of the incident",
+                "Within 3 months from the date of the incident",
+                "Within 6 months from the date of the incident",
+                "Within 1 year from the date of the incident"
+              ],
+              correct_answer: "Within 3 months from the date of the incident",
+              marks: 10,
+              explanation: "Under Section 9 of the POSH Act, a written complaint must be submitted to the Internal Committee within 3 months of the incident."
+            },
+            {
+              id: "q_2",
+              type: "TRUE_FALSE",
+              question: "Workplace under the POSH Act includes any place visited by the employee arising out of or during the course of employment, including transportation provided by the employer.",
+              options: ["True", "False"],
+              correct_answer: "True",
+              marks: 10,
+              explanation: "The Act defines an extended workplace which covers official trips, offsite events, client locations, and company transport."
+            },
+            {
+              id: "q_3",
+              type: "DESCRIPTIVE",
+              question: "Describe what proactive steps you would take as a team member or lead if you witness inappropriate or uncomfortable conduct towards a colleague.",
+              correct_answer: "",
+              marks: 10,
+              explanation: "Should include active bystander intervention, checking in with the colleague, maintaining confidentiality, and reporting through appropriate HR/IC channels."
+            }
+          ],
+          is_active: true,
+          allow_retake: true,
+        });
+
+        // Seed Departmental program
+        await TrainingProgram.create({
+          code: "TRN-2026-002",
+          title: "Modern React 19, TypeScript & Next.js Architecture",
+          description: "Advanced engineering workshop for frontend and full-stack software engineers covering React 19 server actions, TypeScript 5.x patterns, and scalable micro-frontend architecture.",
+          objectives: "Master state management, clean architecture, performance profiling, and test-driven UI development.",
+          type: "DEPARTMENTAL",
+          category: "Technical",
+          delivery_mode: "Online",
+          department: "IT / Engineering",
+          target_audience_type: "DEPARTMENT",
+          is_mandatory: false,
+          is_onboarding_mandatory: false,
+          duration_hours: 6.0,
+          completion_criteria: "Attend live coding labs and submit repository link.",
+          trainer_type: "INTERNAL",
+          trainer_name: "Rishi Kumar (Lead Architect)",
+          trainer_email: "rishi.kumar@tata.com",
+          meeting_link: "https://zoom.us/j/9988776655",
+          session_instructions: "Node.js v20+ and VSCode required. Git clone the starter repo before attending.",
+          learning_materials: [
+            { name: "React 19 Deep Dive Slide Deck.pdf", type: "pdf", url: "/api/uploads/react19_deck.pdf" }
+          ],
+          status: "Published",
+          proposal_status: "Approved",
+          created_by_name: "Engineering HOD",
+          created_by_role: "hod",
+          start_date: "2026-11-05",
+          end_date: "2026-11-06",
+          due_date: "2026-11-20",
+          capacity: 40,
+          assessment_required: false,
+          feedback_required: true,
+          certificate_provided: true,
+        });
+
+        console.log("Initial default Training & Development programs seeded.");
+      }
+    } catch (trainSeedErr) {
+      console.warn("Could not seed default training programs:", trainSeedErr.message);
+    }
+
+    // Automatically ensure hr_events table has theme column
+    try {
+      await sequelize.query(`
+        ALTER TABLE hr_events ADD COLUMN IF NOT EXISTS theme VARCHAR(50) DEFAULT 'purple';
+      `);
+    } catch (thmErr) {
+      // ignore
+    }
+
     console.log("PG connected...");
   } catch (err) {
     console.error("Postgres connection error:", err.message);
@@ -467,4 +765,12 @@ module.exports = {
   Onboarding,
   Holiday,
   AdminTask,
+  HrEvent,
+  TrainingProgram,
+  TrainingSession,
+  TrainingEnrollment,
+  TrainingAssessment,
+  AssessmentSubmission,
+  TrainingFeedback,
+  EmployeeCertification,
 };
