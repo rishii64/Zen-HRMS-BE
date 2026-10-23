@@ -825,9 +825,17 @@ const KpiController = {
       const { role, employee_id } = req.user;
       const { cycle_name, department } = req.query;
 
-      // Find user's department if HOD
+      // Find user's department if HOD / Department Leader
       let deptFilter = department;
-      if (role === "hod" && !deptFilter) {
+      const userDesig = (req.user?.designation || "").toLowerCase().trim();
+      const isLeadershipDesig =
+        /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(userDesig) ||
+        userDesig.includes("team lead") ||
+        userDesig.includes("tech lead") ||
+        userDesig.includes("department head") ||
+        userDesig.includes("head of");
+
+      if ((role === "hod" || isLeadershipDesig) && !deptFilter) {
         const u = await User.findOne({ where: { employee_id } });
         if (u && u.dept) {
           deptFilter = u.dept;
@@ -1689,23 +1697,28 @@ const KpiController = {
 
       let where = {};
 
+      const desig = (req.user?.designation || "").toLowerCase().trim();
+      const isHodDesig = /\b(hod|head|agm|dgm|gm|director)\b/i.test(desig) || desig.includes("department head") || desig.includes("head of");
+      const isManagerDesig = /\b(manager|mgr)\b/i.test(desig);
+      const isTlDesig = /\b(lead|tl|supervisor)\b/i.test(desig) || desig.includes("team lead") || desig.includes("tech lead");
+
       if (["hr", "admin"].includes(role)) {
         // HR sees all pending
-      } else if (role === "hod") {
+      } else if (role === "hod" || isHodDesig) {
         where = {
           [Op.or]: [
             { current_stage: "hod", department: dept },
             { hod_id: employee_id, current_stage: "hod" },
           ],
         };
-      } else if (role === "manager") {
+      } else if (role === "manager" || isManagerDesig) {
         where = {
           [Op.or]: [
             { current_stage: "manager", manager_id: employee_id },
             { current_stage: "manager", department: dept },
           ],
         };
-      } else if (role === "teamlead") {
+      } else if (role === "teamlead" || isTlDesig) {
         where = {
           [Op.or]: [
             { current_stage: "tl", tl_id: employee_id },

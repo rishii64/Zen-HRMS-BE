@@ -5,7 +5,23 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendOTPEmail } = require("../utils/mailer");
 
-const VALID_ROLES = ["hr", "employee", "accounts", "hod"];
+const VALID_ROLES = [
+  "management",
+  "hr",
+  "employee",
+  "accounts",
+  "admin",
+  "hrmanager",
+  "hod",
+  "manager",
+  "teamlead",
+  "payroll",
+  "ceo",
+  "coo",
+  "cfo",
+  "vp",
+  "secretary"
+];
 
 const AuthController = {
   // POST /api/auth/register
@@ -107,45 +123,28 @@ const AuthController = {
     try {
       const { employee_id, password, role } = req.body;
 
-      if (!employee_id || !password || !role) {
-        return res.status(400).json({ error: "Employee ID, password, and role are required" });
+      if (!employee_id || !password) {
+        return res.status(400).json({ error: "Employee ID and password are required" });
       }
 
-      const normalizedRole = role.toLowerCase().trim();
-      if (!VALID_ROLES.includes(normalizedRole)) {
+      const normalizedRole = role ? role.toLowerCase().trim() : "";
+      if (normalizedRole && !VALID_ROLES.includes(normalizedRole)) {
         return res.status(400).json({ error: "Invalid role selected" });
       }
 
-      // Find user by employee_id (Employee Code) or email, and role
+      // Find user by employee_id (Employee Code) or email
       const loginIdentifier = employee_id.toLowerCase().trim();
       const user = await User.findOne({
         where: {
-          [Op.and]: [
-            {
-              [Op.or]: [
-                sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
-                sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
-              ]
-            },
-            sequelize.where(sequelize.fn("LOWER", sequelize.col("role")), normalizedRole)
+          [Op.or]: [
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
           ]
         }
       });
 
       if (!user) {
-        // Check if the employee code or email is registered at all (across any role)
-        const anyUser = await User.findOne({
-          where: {
-            [Op.or]: [
-              sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), loginIdentifier),
-              sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), loginIdentifier)
-            ]
-          }
-        });
-        if (!anyUser) {
-          return res.status(404).json({ error: "User doesn't exist" });
-        }
-        return res.status(401).json({ error: "Invalid Employee ID, password, or role" });
+        return res.status(404).json({ error: "User doesn't exist" });
       }
 
       // Check user active status
@@ -156,18 +155,69 @@ const AuthController = {
       // Verify password
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        return res.status(401).json({ error: "Invalid Employee ID, password, or role" });
+        return res.status(401).json({ error: "Invalid Employee ID or password" });
       }
 
-      // Create JWT token
+      // Role compatibility verification
+      let userRole = (user.role || "employee").toLowerCase().trim();
+      if (userRole === "employees") userRole = "employee";
+
+      if (normalizedRole) {
+        const isAdminLeadership = ["admin", "management", "ceo", "coo", "cto", "cfo", "vp", "secretary"].includes(userRole);
+        const isExactMatch = userRole === normalizedRole;
+        const isEmployeeLogin = normalizedRole === "employee"; // Every person in the organization is an employee
+        const isItMatch = userRole === "it" && ["it", "employee"].includes(normalizedRole);
+        const isManagementMatch = ["management", "ceo", "coo", "cfo", "vp", "secretary"].includes(userRole) && ["management", "admin", "employee"].includes(normalizedRole);
+        const isHodManager = ["hod", "manager", "teamlead"].includes(userRole) && ["hod", "manager", "teamlead", "management", "employee"].includes(normalizedRole);
+        const isFinancePayroll = ["accounts", "payroll"].includes(userRole) && ["accounts", "payroll", "employee"].includes(normalizedRole);
+        const isHrMatch = ["hr", "hrmanager"].includes(userRole) && ["hr", "hrmanager", "employee"].includes(normalizedRole);
+        const isAdminMatch = userRole === "admin" && ["admin", "management", "employee"].includes(normalizedRole);
+
+        if (!isAdminLeadership && !isExactMatch && !isEmployeeLogin && !isItMatch && !isManagementMatch && !isHodManager && !isFinancePayroll && !isHrMatch && !isAdminMatch) {
+          return res.status(401).json({
+            error: `Access Denied: This account is registered as '${user.role}'. Please select the appropriate role to log in.`
+          });
+        }
+      }
+
+      const canonicalRole = userRole === "employees" ? "employee" : userRole;
+
+      // Ensure designation & department are synced from Employee table if needed
+      let userDesignation = user.designation || "";
+      let userDept = user.dept || "";
+      if ((!userDesignation || !userDept) && user.employee_id) {
+        try {
+          const emp = await Employee.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              user.employee_id.toLowerCase().trim()
+            ),
+            attributes: ["designation", "dept", "department"]
+          });
+          if (emp) {
+            if (!userDesignation && emp.designation) {
+              userDesignation = emp.designation;
+              user.designation = userDesignation;
+            }
+            if (!userDept && (emp.dept || emp.department)) {
+              userDept = emp.dept || emp.department;
+              user.dept = userDept;
+            }
+            await user.save().catch(() => {});
+          }
+        } catch (_) {}
+      }
+
+      // Create JWT token including designation for RBAC
       const token = jwt.sign(
         {
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
-          dept: user.dept,
+          role: canonicalRole,
+          dept: userDept || user.dept,
           employee_id: user.employee_id,
+          designation: userDesignation || user.designation || "",
         },
         process.env.JWT_SECRET,
         { expiresIn: "14h" }
@@ -183,22 +233,35 @@ const AuthController = {
         maxAge: 14 * 60 * 60 * 1000 // 14 hours
       });
 
+      // Auto-register attendance check-in on portal login
+      let autoAttendance = null;
+      try {
+        const AttendanceController = require("./attendanceController");
+        if (user.employee_id && AttendanceController.performAutoCheckIn) {
+          autoAttendance = await AttendanceController.performAutoCheckIn(user.employee_id);
+        }
+      } catch (attErr) {
+        console.warn("Auto check-in on login warning:", attErr.message);
+      }
+
       return res.json({
         success: true,
         message: "Login successful",
         token,
+        attendance: autoAttendance,
         user: {
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: canonicalRole,
           employee_id: user.employee_id,
           employee_code: user.employee_id,
-          dept: user.dept,
-          designation: user.designation,
+          dept: userDept || user.dept,
+          designation: userDesignation || user.designation || "",
           profile_photo: user.profile_photo,
           tabs_enabled: user.tabs_enabled || false,
-          enabled_tabs: user.enabled_tabs || "1,2,3,4"
+          enabled_tabs: user.enabled_tabs || "1,2,3,4",
+          notice_acknowledged: Boolean(user.notice_acknowledged)
         }
       });
     } catch (err) {
@@ -436,7 +499,28 @@ const AuthController = {
   },
 
   // POST /api/auth/logout
-  logout(req, res) {
+  async logout(req, res) {
+    try {
+      let empId = req.user?.employee_id;
+      if (!empId) {
+        const rawToken = req.cookies?.token || (req.headers.authorization && req.headers.authorization.split(" ")[1]);
+        if (rawToken) {
+          try {
+            const decoded = jwt.verify(rawToken, process.env.JWT_SECRET, { ignoreExpiration: true });
+            empId = decoded?.employee_id;
+          } catch (_) {}
+        }
+      }
+      if (empId) {
+        const AttendanceController = require("./attendanceController");
+        if (AttendanceController.performAutoCheckOut) {
+          await AttendanceController.performAutoCheckOut(empId);
+        }
+      }
+    } catch (outErr) {
+      console.warn("Auto check-out on logout warning:", outErr.message);
+    }
+
     const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
     res.clearCookie("token", {
       path: "/",
@@ -444,6 +528,29 @@ const AuthController = {
       sameSite: "lax"
     });
     return res.json({ success: true, message: "Logged out successfully" });
+  },
+
+  // POST /api/auth/acknowledge-notice
+  async acknowledgeNotice(req, res) {
+    try {
+      const userId = req.user?.id;
+      const employeeId = req.user?.employee_id;
+      if (!userId && !employeeId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      await User.update(
+        { notice_acknowledged: true },
+        {
+          where: userId ? { id: userId } : { employee_id: employeeId }
+        }
+      );
+
+      return res.json({ success: true, message: "Attendance notice acknowledged permanently" });
+    } catch (err) {
+      console.error("Acknowledge notice error:", err.message);
+      return res.status(500).json({ error: "Failed to acknowledge notice" });
+    }
   }
 };
 

@@ -2,6 +2,17 @@ const { Schedule, User, Employee, Holiday } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 
+const isLeader = (req) => {
+  const desig = (req.user?.designation || "").toLowerCase().trim();
+  return (
+    /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(desig) ||
+    desig.includes("team lead") ||
+    desig.includes("tech lead") ||
+    desig.includes("department head") ||
+    desig.includes("head of")
+  );
+};
+
 const ScheduleController = {
   // GET /api/auth/schedule
   async getSchedule(req, res) {
@@ -17,7 +28,7 @@ const ScheduleController = {
 
       const userDept = currentUser.dept || "Other";
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager" || role === "accounts";
+      const isHodOrManager = role === "hod" || role === "manager" || role === "accounts" || isLeader(req);
 
       let whereClause = {};
 
@@ -97,7 +108,7 @@ const ScheduleController = {
 
       const creator = await User.findOne({ where: { employee_id: creatorId } });
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager";
+      const isHodOrManager = role === "hod" || role === "manager" || isLeader(req);
 
       // Permission Enforcement
       if (!isHrOrAdmin && !isHodOrManager) {
@@ -312,7 +323,7 @@ const ScheduleController = {
       } = req.body;
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager";
+      const isHodOrManager = role === "hod" || role === "manager" || isLeader(req);
 
       if (!isHrOrAdmin && !isHodOrManager) {
         return res.status(403).json({ error: "Only HOD, HR, or Admin can assign rotational schedules" });
@@ -555,7 +566,7 @@ const ScheduleController = {
 
       const creator = await User.findOne({ where: { employee_id: creatorId } });
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager";
+      const isHodOrManager = role === "hod" || role === "manager" || isLeader(req);
 
       if (!isHrOrAdmin && !isHodOrManager) {
         return res.status(403).json({ error: "Only HOD, HR, or Admin can upload schedules" });
@@ -618,7 +629,7 @@ const ScheduleController = {
       const { role } = req.user;
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager";
+      const isHodOrManager = role === "hod" || role === "manager" || isLeader(req);
 
       if (!isHrOrAdmin && !isHodOrManager) {
         return res.status(403).json({ error: "Only HOD, HR, or Admin can delete schedule records" });

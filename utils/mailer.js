@@ -281,4 +281,260 @@ const sendInterviewScheduleEmail = async ({
   return await transporter.sendMail(mailOptions);
 };
 
-module.exports = { sendOTPEmail, sendCredentialsEmail, sendInterviewScheduleEmail };
+const sendHREventAnnouncementEmail = async ({
+  recipients,
+  eventName,
+  eventCategory,
+  companyName,
+  branchLocation,
+  address,
+  eventDate,
+  startTime,
+  endTime,
+  content,
+  signOff,
+  theme = "purple",
+}) => {
+  if (!recipients || recipients.length === 0) {
+    return { success: false, reason: "No recipients provided" };
+  }
+
+  // Theme palettes matching the reference illustration
+  const themeConfigs = {
+    purple: {
+      gradient: "linear-gradient(135deg, #7c3aed 0%, #c026d3 50%, #f59e0b 100%)",
+      headerBg: "#1e1035",
+      accent: "#9333ea",
+      badgeBg: "#f3e8ff",
+      badgeText: "#7e22ce",
+      ticketHolo: "linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 50%, #fde047 100%)",
+      ticketText: "#3b0764",
+      border: "#d8b4fe",
+    },
+    emerald: {
+      gradient: "linear-gradient(135deg, #059669 0%, #0d9488 50%, #06b6d4 100%)",
+      headerBg: "#042f2e",
+      accent: "#059669",
+      badgeBg: "#d1fae5",
+      badgeText: "#065f46",
+      ticketHolo: "linear-gradient(135deg, #a7f3d0 0%, #99f6e4 50%, #bae6fd 100%)",
+      ticketText: "#064e3b",
+      border: "#6ee7b7",
+    },
+    blue: {
+      gradient: "linear-gradient(135deg, #2563eb 0%, #4f46e5 50%, #06b6d4 100%)",
+      headerBg: "#0f172a",
+      accent: "#2563eb",
+      badgeBg: "#dbeafe",
+      badgeText: "#1e40af",
+      ticketHolo: "linear-gradient(135deg, #bfdbfe 0%, #c7d2fe 50%, #a5f3fc 100%)",
+      ticketText: "#1e3a8a",
+      border: "#93c5fd",
+    },
+    sunset: {
+      gradient: "linear-gradient(135deg, #ea580c 0%, #e11d48 50%, #f59e0b 100%)",
+      headerBg: "#2a0800",
+      accent: "#ea580c",
+      badgeBg: "#ffedd5",
+      badgeText: "#9a3412",
+      ticketHolo: "linear-gradient(135deg, #fed7aa 0%, #fecdd3 50%, #fef08a 100%)",
+      ticketText: "#7c2d12",
+      border: "#fdba74",
+    },
+  };
+
+  const currentTheme = themeConfigs[theme] || themeConfigs.purple;
+
+  // Format date nicely (e.g., Monday, 26 October 2026)
+  let formattedDate = eventDate;
+  let shortMonth = "EVT";
+  let dayNum = "26";
+  try {
+    const d = new Date(eventDate);
+    if (!isNaN(d.getTime())) {
+      formattedDate = d.toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      shortMonth = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+      dayNum = d.getDate();
+    }
+  } catch (_) { }
+
+  // Helper to format time into 12-hour AM/PM IST format
+  const formatTimeToIST = (timeStr) => {
+    if (!timeStr) return "";
+    const trimmed = String(timeStr).trim();
+    if (!trimmed) return "";
+
+    // If already in 12-hour format with AM/PM (e.g. "10:30 AM" or "1:30 PM")
+    const ampmMatch = trimmed.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)$/i);
+    if (ampmMatch) {
+      let hours = parseInt(ampmMatch[1], 10);
+      const minutes = ampmMatch[2];
+      const ampm = ampmMatch[3].toUpperCase();
+      const strHours = hours < 10 ? `0${hours}` : `${hours}`;
+      return `${strHours}:${minutes} ${ampm}`;
+    }
+
+    // If in 24-hour format (e.g. "12:30", "17:30", "09:15", "17:30:00")
+    const match24 = trimmed.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if (match24) {
+      let hours = parseInt(match24[1], 10);
+      const minutes = match24[2];
+      const ampm = hours >= 12 ? "PM" : "AM";
+      hours = hours % 12;
+      hours = hours ? hours : 12; // 0 becomes 12
+      const strHours = hours < 10 ? `0${hours}` : `${hours}`;
+      return `${strHours}:${minutes} ${ampm}`;
+    }
+
+    return trimmed;
+  };
+
+  const formattedStartTime = formatTimeToIST(startTime);
+  const formattedEndTime = formatTimeToIST(endTime);
+  let timeDisplay = "As scheduled";
+  if (formattedStartTime && formattedEndTime) {
+    timeDisplay = `${formattedStartTime} – ${formattedEndTime} (IST)`;
+  } else if (formattedStartTime) {
+    timeDisplay = `${formattedStartTime} (IST)`;
+  } else if (formattedEndTime) {
+    timeDisplay = `${formattedEndTime} (IST)`;
+  }
+
+  // Escape and format multi-line content for HTML
+  const formattedContent = (content || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br />");
+
+  const mailOptions = {
+    from: `"${companyName || "Zentelex"} HR Team" <${process.env.SMTP_MAIL}>`,
+    to: process.env.SMTP_MAIL,
+    bcc: recipients,
+    subject: `🎟️ [Official Invitation] ${eventName} — ${companyName || "Zentelex"} (${formattedDate})`,
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; width: 100%; margin: 0 auto; padding: 0; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #0f172a; color: #ffffff; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.15); box-sizing: border-box; word-break: break-word; overflow-wrap: break-word;">
+        
+        <div style="background: ${currentTheme.gradient}; padding: 24px 16px 20px; text-align: center; color: #ffffff; box-sizing: border-box;">
+          <div style="display: inline-block; padding: 4px 14px; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 9999px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; max-width: 90%; word-break: break-word;">
+            ★ ${eventCategory || "Company Event"} • OFFICIAL INVITATION ★
+          </div>
+          <h1 style="color: #ffffff; margin: 4px 0; font-size: 22px; font-weight: 900; letter-spacing: -0.5px; line-height: 1.25; word-break: break-word; overflow-wrap: break-word;">
+            ${companyName || "Zentelex HRMS"}
+          </h1>
+          <p style="color: rgba(255, 255, 255, 0.85); font-size: 12px; margin: 0; font-weight: 500; word-break: break-word;">
+            Human Resources Operations • Corporate Event Desk
+          </p>
+        </div>
+
+        <div style="padding: 16px 12px 10px; background-color: #0b0f19; box-sizing: border-box;">
+          <div style="background: ${currentTheme.ticketHolo}; border-radius: 16px; padding: 16px 12px; color: ${currentTheme.ticketText}; position: relative; border: 2px solid rgba(255,255,255,0.85); box-shadow: 0 6px 20px rgba(0,0,0,0.25); box-sizing: border-box; overflow: hidden;">
+            <table style="width: 100%; border-collapse: collapse; table-layout: fixed;">
+              <tr>
+                <td style="vertical-align: top; width: 22px; font-size: 8px; font-weight: 900; letter-spacing: 2px; color: ${currentTheme.ticketText}; text-transform: uppercase; writing-mode: vertical-lr; transform: rotate(180deg); padding-right: 8px; border-right: 2px dashed rgba(0,0,0,0.2); word-break: normal; white-space: nowrap; box-sizing: border-box;">
+                  YOU ARE INVITED
+                </td>
+                <td style="vertical-align: top; padding-left: 10px; word-break: break-word; overflow-wrap: break-word; box-sizing: border-box;">
+                  <div style="font-size: 10px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; opacity: 0.85; margin-bottom: 4px; word-break: break-word;">
+                    ✦ OFFICIAL ADMISSION PASS ✦
+                  </div>
+                  <h2 style="font-size: 17px; font-weight: 900; margin: 0 0 8px; line-height: 1.3; color: ${currentTheme.ticketText}; word-break: break-word; overflow-wrap: break-word;">
+                    ${eventName}
+                  </h2>
+                  <div style="font-size: 12px; font-weight: 700; margin-bottom: 6px; line-height: 1.4; word-break: break-word; overflow-wrap: break-word;">
+                    📅 ${formattedDate}<br />⏰ ${timeDisplay}
+                  </div>
+                  <div style="font-size: 11px; font-weight: 600; opacity: 0.9; line-height: 1.35; word-break: break-word; overflow-wrap: break-word;">
+                    📍 ${branchLocation || "Company Premises"}${address ? ` — ${address}` : ""}
+                  </div>
+                  
+                  <table style="width: 100%; margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.15); border-collapse: collapse; table-layout: fixed;">
+                    <tr>
+                      <td style="font-family: 'Courier New', Courier, monospace; font-size: 11px; font-weight: bold; letter-spacing: 1px; color: ${currentTheme.ticketText}; text-align: left; white-space: nowrap; overflow: hidden;">
+                        ||||||||||||||||||
+                      </td>
+                      <td style="font-size: 9px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; color: ${currentTheme.ticketText}; text-align: right; white-space: nowrap;">
+                        #HR-VIP-2026
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div style="padding: 20px 16px; background-color: #ffffff; color: #0f172a; box-sizing: border-box; word-break: break-word; overflow-wrap: break-word;">
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 14px; margin-bottom: 20px; box-sizing: border-box;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 85px; font-weight: 600; vertical-align: top; font-size: 12px;">📅 Date:</td>
+                <td style="padding: 6px 0 6px 6px; color: #0f172a; font-weight: 700; word-break: break-word; overflow-wrap: break-word; font-size: 13px;">${formattedDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 85px; font-weight: 600; vertical-align: top; font-size: 12px;">⏰ Time:</td>
+                <td style="padding: 6px 0 6px 6px; color: ${currentTheme.accent}; font-weight: 700; word-break: break-word; overflow-wrap: break-word; font-size: 13px;">${timeDisplay}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 85px; font-weight: 600; vertical-align: top; font-size: 12px;">📍 Location:</td>
+                <td style="padding: 6px 0 6px 6px; color: #0f172a; font-weight: 700; word-break: break-word; overflow-wrap: break-word; font-size: 13px;">${branchLocation || "Company Premises"}</td>
+              </tr>
+              ${address ? `
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 85px; font-weight: 600; vertical-align: top; font-size: 12px;">🏢 Address:</td>
+                <td style="padding: 6px 0 6px 6px; color: #334155; font-weight: 500; word-break: break-word; overflow-wrap: break-word; font-size: 12px; line-height: 1.4;">${address}</td>
+              </tr>
+              ` : ""}
+            </table>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <h3 style="font-size: 12px; font-weight: 800; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; margin: 0 0 8px;">
+              Event Overview & Agenda
+            </h3>
+            <div style="background-color: #f8fafc; border-left: 4px solid ${currentTheme.accent}; border-radius: 8px; padding: 14px 14px; font-size: 13px; line-height: 1.6; color: #334155; word-break: break-word; overflow-wrap: break-word;">
+              ${formattedContent}
+            </div>
+          </div>
+
+          <div style="margin-top: 24px; padding-top: 16px; border-top: 1px dashed #cbd5e1; text-align: right;">
+            <p style="margin: 0; font-size: 12px; color: #64748b; font-style: italic;">
+              With warm regards,
+            </p>
+            <p style="margin: 4px 0 0; font-size: 17px; font-weight: 900; color: #0f172a; letter-spacing: -0.2px; word-break: break-word;">
+              ${signOff || "HR Team"}
+            </p>
+            <p style="margin: 2px 0 0; font-size: 12px; font-weight: 700; color: ${currentTheme.accent}; word-break: break-word;">
+              ${companyName || "Zentelex HRMS"}
+            </p>
+          </div>
+        </div>
+
+        <div style="background-color: #0b0f19; padding: 14px 16px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); word-break: break-word;">
+          Official HR company invitation dispatched to all active employees.<br />
+          &copy; 2026 ${companyName || "Zentelex HRMS"} &bull; Human Resources Operations Desk
+        </div>
+      </div>
+    `,
+  };
+
+  try {
+    return await transporter.sendMail(mailOptions);
+  } catch (err) {
+    console.error("Nodemailer sendHREventAnnouncementEmail error:", err.message);
+    throw err;
+  }
+};
+
+module.exports = {
+  sendOTPEmail,
+  sendCredentialsEmail,
+  sendInterviewScheduleEmail,
+  sendHREventAnnouncementEmail,
+};
+

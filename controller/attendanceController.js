@@ -119,19 +119,20 @@ const AttendanceController = {
       const { date, dept, range, scope, emp_id, order } = req.query;
       const { role, employee_id } = req.user;
 
-      // Find user details to check department
-      const user = await User.findOne({ where: { employee_id } });
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      // Resolve department from User model or fallback to Employee model
-      let resolvedDept = user.dept;
-      if (!resolvedDept || resolvedDept === "Other" || resolvedDept === "General") {
-        const emp = await Employee.findOne({ where: { employee_id } });
-        if (emp && (emp.dept || emp.department)) {
-          resolvedDept = emp.dept || emp.department;
-        }
+      // 1. Department Resolution: Fast-path from JWT token; only query DB if HOD/Manager and missing
+      let resolvedDept = req.user.dept;
+      if ((!resolvedDept || resolvedDept === "Other" || resolvedDept === "General") &&
+          (role === "hod" || role === "accounts" || role === "manager" || role === "payroll")) {
+        try {
+          const user = await User.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              (employee_id || "").toLowerCase().trim()
+            ),
+            attributes: ["dept"]
+          });
+          if (user?.dept) resolvedDept = user.dept;
+        } catch (_) {}
       }
 
       const istNow = getISTParts();
@@ -205,55 +206,90 @@ const AttendanceController = {
       // Enforce visibility rules
       let empWhere = { status: { [Op.ne]: "Terminated" } };
 
+      const userDesig = (req.user?.designation || "").toLowerCase().trim();
+      const isLeadershipDesig =
+        /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(userDesig) ||
+        userDesig.includes("team lead") ||
+        userDesig.includes("tech lead") ||
+        userDesig.includes("department head") ||
+        userDesig.includes("head of");
+
+      const isSupervisor = role === "hr" || role === "admin" || role === "hrmanager" || role === "hod" || role === "manager" || role === "teamlead" || isLeadershipDesig;
       if (scope === "my" || emp_id) {
-        // Specifically requested personal/target attendance logs
-        const isSupervisor = role === "hr" || role === "admin" || role === "hrmanager" || role === "hod" || role === "manager" || role === "teamlead";
         const targetEmpId = (emp_id && isSupervisor) ? emp_id : employee_id;
-        whereClause.employee_id = { [Op.iLike]: targetEmpId.trim() };
-        empWhere.employee_id = { [Op.iLike]: targetEmpId.trim() };
-      } else if (role === "hr" || role === "admin" || role === "hrmanager") {
-        // HR/Admin can see all, with optional filter by dept
-        if (dept && dept !== "All") {
-          whereClause.dept = { [Op.iLike]: dept.trim() };
-          empWhere.dept = { [Op.iLike]: dept.trim() };
+        const cleanEmpId = targetEmpId ? String(targetEmpId).trim() : "";
+        if (cleanEmpId) {
+          whereClause.employee_id = { [Op.iLike]: cleanEmpId };
+          empWhere.employee_id = { [Op.iLike]: cleanEmpId };
         }
-      } else if (role === "hod" || role === "accounts" || role === "manager" || role === "payroll") {
-        // HOD/Accounts/Manager see department logs only
+      } else if (role === "hr" || role === "admin" || role === "hrmanager") {
+        if (dept && dept !== "All") {
+          const cleanDept = String(dept).trim();
+          whereClause.dept = { [Op.iLike]: cleanDept };
+          empWhere.dept = { [Op.iLike]: cleanDept };
+        }
+      } else if (role === "hod" || role === "accounts" || role === "manager" || role === "payroll" || isLeadershipDesig) {
         const filterDept = (dept && dept !== "All") ? dept : (resolvedDept && resolvedDept !== "Other" && resolvedDept !== "General" ? resolvedDept : null);
         if (filterDept) {
-          whereClause.dept = { [Op.iLike]: filterDept.trim() };
-          empWhere.dept = { [Op.iLike]: filterDept.trim() };
+          const cleanDept = String(filterDept).trim();
+          whereClause.dept = { [Op.iLike]: cleanDept };
+          empWhere.dept = { [Op.iLike]: cleanDept };
         }
       } else {
-        // Employees can only view their own attendance log history
-        whereClause.employee_id = { [Op.iLike]: employee_id.trim() };
-        empWhere.employee_id = { [Op.iLike]: employee_id.trim() };
+        const cleanEmpId = employee_id ? String(employee_id).trim() : "";
+        if (cleanEmpId) {
+          whereClause.employee_id = { [Op.iLike]: cleanEmpId };
+          empWhere.employee_id = { [Op.iLike]: cleanEmpId };
+        }
       }
 
       const isAsc = (order && String(order).toLowerCase() === "asc") ||
         (order !== "desc" && (range === "month" || range === "year"));
       const sortDirection = isAsc ? "ASC" : "DESC";
 
+      // 2. Fetch primary attendance records (with raw: true for maximum throughput)
       const records = await Attendance.findAll({
         where: whereClause,
         order: [["date", sortDirection], ["id", sortDirection]],
+        raw: true,
       });
 
-      // Enrich records with shift information from Schedule table and employee profile details
+      // 3. Enrich records with shift information from Schedule table and employee profile details in PARALLEL
       let enrichedRecords = records;
       let synthesizedRecords = [];
 
       try {
-        // 1. Fetch all employees in scope
-        const activeEmployees = await Employee.findAll({
-          where: empWhere,
-          attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date"]
-        });
+        const scheduleWhere = {
+          date: { [Op.between]: [startDateStr, endDateStr] }
+        };
+        if (empWhere.employee_id) {
+          scheduleWhere.employee_id = empWhere.employee_id;
+        }
 
-        const activeUsers = await User.findAll({
-          where: empWhere,
-          attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off"]
-        });
+        const [activeEmployees, activeUsers, schedules, holidays] = await Promise.all([
+          Employee.findAll({
+            where: empWhere,
+            attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date"],
+            raw: true,
+          }),
+          User.findAll({
+            where: empWhere,
+            attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off"],
+            raw: true,
+          }),
+          Schedule.findAll({
+            where: scheduleWhere,
+            attributes: ["id", "employee_id", "date", "shift_name", "start_time", "end_time", "notes"],
+            raw: true,
+          }),
+          Holiday.findAll({
+            where: {
+              date: { [Op.between]: [startDateStr, endDateStr] }
+            },
+            attributes: ["id", "name", "date"],
+            raw: true,
+          }),
+        ]);
 
         const employeeCatalog = new Map();
         activeEmployees.forEach(e => {
@@ -285,39 +321,20 @@ const AttendanceController = {
           }
         });
 
-        // 2. Fetch schedules in this date window (filter by employee if scoped)
-        const scheduleWhere = {
-          date: { [Op.between]: [startDateStr, endDateStr] }
-        };
-        if (empWhere.employee_id) {
-          scheduleWhere.employee_id = empWhere.employee_id;
-        }
-        const schedules = await Schedule.findAll({
-          where: scheduleWhere,
-          attributes: ["id", "employee_id", "date", "shift_name", "start_time", "end_time", "notes"]
-        });
-
         const scheduleMap = {};
         schedules.forEach(s => {
           const key = `${(s.employee_id || "").toLowerCase().trim()}_${s.date}`;
           scheduleMap[key] = s;
         });
 
-        // 2b. Fetch company & public holidays in this date window
-        const holidays = await Holiday.findAll({
-          where: {
-            date: { [Op.between]: [startDateStr, endDateStr] }
-          },
-          attributes: ["id", "name", "date"]
-        });
         const holidayMap = {};
         holidays.forEach(h => {
           holidayMap[h.date] = h;
         });
 
-        // 3. Enrich existing punched records
+        // Enrich existing punched records
         enrichedRecords = records.map(r => {
-          const plain = r.toJSON ? r.toJSON() : { ...r };
+          const plain = { ...r };
           const eKey = (plain.employee_id || "").toLowerCase().trim();
           const sKey = `${eKey}_${plain.date}`;
           const matchedSchedule = scheduleMap[sKey];
@@ -335,7 +352,7 @@ const AttendanceController = {
           return plain;
         });
 
-        // 4. Synthesize absent, week-off and roster days for all dates in range
+        // 4. Synthesize absent, week-off and roster days for dates in range (bounded to avoid memory bloat)
         const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
         const dateList = [];
@@ -347,111 +364,120 @@ const AttendanceController = {
           curD.setDate(curD.getDate() + 1);
         }
 
-        const existingAttendanceMap = new Set();
-        records.forEach(r => {
-          const k = `${(r.employee_id || "").toLowerCase().trim()}_${r.date}`;
-          existingAttendanceMap.add(k);
-        });
+        // Only synthesize if dateList is reasonable (<= 62 days) or scoped to a specific employee
+        const shouldSynthesize = dateList.length <= 62 || Boolean(empWhere.employee_id);
+        if (shouldSynthesize && employeeCatalog.size > 0) {
+          const existingAttendanceMap = new Set();
+          records.forEach(r => {
+            const k = `${(r.employee_id || "").toLowerCase().trim()}_${r.date}`;
+            existingAttendanceMap.add(k);
+          });
 
-        for (const [eKey, emp] of employeeCatalog.entries()) {
-          for (const dStr of dateList) {
-            const mapKey = `${eKey}_${dStr}`;
-            if (existingAttendanceMap.has(mapKey)) {
-              continue; // employee has actual punch record
-            }
+          for (const [eKey, emp] of employeeCatalog.entries()) {
+            for (const dStr of dateList) {
+              const mapKey = `${eKey}_${dStr}`;
+              if (existingAttendanceMap.has(mapKey)) {
+                continue; // employee has actual punch record
+              }
 
-            if (emp.joining_date && dStr < emp.joining_date) {
-              continue; // don't synthesize absents prior to joining date
-            }
+              if (emp.joining_date && dStr < emp.joining_date) {
+                continue; // don't synthesize absents prior to joining date
+              }
 
-            const matchedSchedule = scheduleMap[mapKey];
-            const dObj = new Date(dStr + "T12:00:00+05:30");
-            const dayName = dayNames[dObj.getDay()];
-            const empWeeklyOff = (emp.weekly_off || "Sunday").toLowerCase().trim();
-            const isFuture = dStr > todayStr;
+              const matchedSchedule = scheduleMap[mapKey];
+              const dObj = new Date(dStr + "T12:00:00+05:30");
+              const dayName = dayNames[dObj.getDay()];
+              const empWeeklyOff = (emp.weekly_off || "Sunday").toLowerCase().trim();
+              const isFuture = dStr > todayStr;
 
-            let status = isFuture ? "Scheduled" : "Absent";
-            let shiftName = "General Shift";
-            let shiftStart = "10:00";
-            let shiftEnd = "19:00";
-            let notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
+              let status = isFuture ? "Scheduled" : "Absent";
+              let shiftName = "General Shift";
+              let shiftStart = "10:00";
+              let shiftEnd = "19:00";
+              let notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
 
-            if (matchedSchedule) {
-              shiftName = matchedSchedule.shift_name || "General Shift";
-              shiftStart = matchedSchedule.start_time || "10:00";
-              shiftEnd = matchedSchedule.end_time || "19:00";
+              if (matchedSchedule) {
+                shiftName = matchedSchedule.shift_name || "General Shift";
+                shiftStart = matchedSchedule.start_time || "10:00";
+                shiftEnd = matchedSchedule.end_time || "19:00";
 
-              if (shiftName.toLowerCase().includes("holiday")) {
+                if (shiftName.toLowerCase().includes("holiday")) {
+                  status = "Holiday";
+                  shiftStart = "—";
+                  shiftEnd = "—";
+                  notes = matchedSchedule.notes || "Official Company Holiday";
+                } else if (shiftName.toLowerCase().includes("off")) {
+                  status = "Week Off";
+                  shiftStart = "—";
+                  shiftEnd = "—";
+                  notes = matchedSchedule.notes || "Scheduled Rotational Week Off";
+                } else {
+                  status = isFuture ? "Scheduled" : "Absent";
+                  notes = matchedSchedule.notes || (isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)");
+                }
+              } else if (holidayMap[dStr]) {
+                const matchedHoliday = holidayMap[dStr];
                 status = "Holiday";
+                shiftName = "Holiday";
                 shiftStart = "—";
                 shiftEnd = "—";
-                notes = matchedSchedule.notes || "Official Company Holiday";
-              } else if (shiftName.toLowerCase().includes("off")) {
-                status = "Week Off";
-                shiftStart = "—";
-                shiftEnd = "—";
-                notes = matchedSchedule.notes || "Scheduled Rotational Week Off";
+                notes = matchedHoliday.name || "Official Company Holiday";
               } else {
-                status = isFuture ? "Scheduled" : "Absent";
-                notes = matchedSchedule.notes || (isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)");
+                // Check employee's weekly_off setting
+                if (dayName === empWeeklyOff) {
+                  status = "Week Off";
+                  shiftName = "Week Off";
+                  shiftStart = "—";
+                  shiftEnd = "—";
+                  notes = "Weekly Off";
+                } else {
+                  status = isFuture ? "Scheduled" : "Absent";
+                  shiftName = "General Shift";
+                  shiftStart = "10:00";
+                  shiftEnd = "19:00";
+                  notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
+                }
               }
-            } else if (holidayMap[dStr]) {
-              const matchedHoliday = holidayMap[dStr];
-              status = "Holiday";
-              shiftName = "Holiday";
-              shiftStart = "—";
-              shiftEnd = "—";
-              notes = matchedHoliday.name || "Official Company Holiday";
-            } else {
-              // Check employee's weekly_off setting
-              if (dayName === empWeeklyOff) {
-                status = "Week Off";
-                shiftName = "Week Off";
-                shiftStart = "—";
-                shiftEnd = "—";
-                notes = "Weekly Off";
-              } else {
-                status = isFuture ? "Scheduled" : "Absent";
-                shiftName = "General Shift";
-                shiftStart = "10:00";
-                shiftEnd = "19:00";
-                notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
-              }
-            }
 
-            synthesizedRecords.push({
-              id: `syn-${emp.employee_id}-${dStr}`,
-              employee_id: emp.employee_id,
-              name: emp.name,
-              dept: emp.dept,
-              designation: emp.designation,
-              profile_photo: emp.profile_photo,
-              date: dStr,
-              check_in: null,
-              check_out: null,
-              work_hours: 0,
-              late_count: 0,
-              status,
-              shift_name: shiftName,
-              shift_start: shiftStart,
-              shift_end: shiftEnd,
-              notes,
-              is_synthesized: true
-            });
+              synthesizedRecords.push({
+                id: `syn-${emp.employee_id}-${dStr}`,
+                employee_id: emp.employee_id,
+                name: emp.name,
+                dept: emp.dept,
+                designation: emp.designation,
+                profile_photo: emp.profile_photo,
+                date: dStr,
+                check_in: null,
+                check_out: null,
+                work_hours: 0,
+                late_count: 0,
+                status,
+                shift_name: shiftName,
+                shift_start: shiftStart,
+                shift_end: shiftEnd,
+                notes,
+                is_synthesized: true
+              });
+            }
           }
         }
       } catch (enrichErr) {
         console.warn("Could not enrich attendance with schedules and profiles:", enrichErr.message);
       }
 
-      // Combine real logs and synthesized records, ordered by date (ascending for month/year or order=asc)
+      // Safe combined sorting that never crashes on null/undefined properties
       const combinedRecords = [...enrichedRecords, ...synthesizedRecords].sort((a, b) => {
-        if (a.date !== b.date) {
-          return isAsc ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date);
+        const dA = a?.date ? String(a.date) : "";
+        const dB = b?.date ? String(b.date) : "";
+        if (dA !== dB) {
+          return isAsc ? dA.localeCompare(dB) : dB.localeCompare(dA);
         }
-        const empComp = (a.employee_id || "").localeCompare(b.employee_id || "");
-        if (empComp !== 0) return empComp;
-        return (a.check_in || "").localeCompare(b.check_in || "");
+        const empA = a?.employee_id ? String(a.employee_id) : "";
+        const empB = b?.employee_id ? String(b.employee_id) : "";
+        if (empA !== empB) return empA.localeCompare(empB);
+        const inA = a?.check_in ? String(a.check_in) : "";
+        const inB = b?.check_in ? String(b.check_in) : "";
+        return inA.localeCompare(inB);
       });
 
       return res.json({ success: true, data: combinedRecords });
@@ -526,67 +552,131 @@ const AttendanceController = {
     }
   },
 
+  // Programmatic / automated check-in logic
+  async performAutoCheckIn(employee_id) {
+    if (!employee_id) return null;
+    const istNow = getISTParts();
+    const today = istNow.dateStr;
+    const utcToday = new Date().toISOString().split("T")[0];
+    const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
+
+    const user = await User.findOne({
+      where: sequelize.where(
+        sequelize.fn("LOWER", sequelize.col("employee_id")),
+        employee_id.toLowerCase().trim()
+      )
+    });
+    if (!user) return null;
+
+    let record = await Attendance.findOne({
+      where: {
+        employee_id: user.employee_id,
+        date: { [Op.or]: [today, utcToday] },
+      },
+    });
+
+    if (record && record.check_in && record.check_in !== "—") {
+      const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+      return { success: true, message: "Already checked in today", record: responseRecord, alreadyCheckedIn: true };
+    }
+
+    // Check shift timing and determine if on-time (Present) or late (Late Present) in IST
+    const shiftInfo = await resolveShiftAndStatus(user.employee_id, today, utcToday, new Date());
+    const status = shiftInfo.status;
+    const late_count = shiftInfo.late_count;
+
+    const resolvedDept = user.dept || ((user.role === "hr" || user.role === "hrmanager") ? "HR" : "Other");
+
+    if (!record) {
+      record = await Attendance.create({
+        employee_id: user.employee_id,
+        name: user.name,
+        dept: resolvedDept,
+        date: today,
+        check_in: timeStr,
+        status,
+        late_count,
+      });
+    } else {
+      await record.update({
+        date: today,
+        check_in: timeStr,
+        status,
+        late_count,
+      });
+    }
+
+    const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+    responseRecord.shift_name = shiftInfo.shift_name;
+    responseRecord.shift_start = shiftInfo.shift_start;
+    responseRecord.shift_end = shiftInfo.shift_end;
+
+    return {
+      success: true,
+      message: `Checked in successfully at ${timeStr} (${status === "Present" ? "On Time" : "Late"})`,
+      record: responseRecord,
+      newCheckIn: true,
+    };
+  },
+
+  // Programmatic / automated check-out logic
+  async performAutoCheckOut(employee_id) {
+    if (!employee_id) return null;
+    const istNow = getISTParts();
+    const today = istNow.dateStr;
+    const utcToday = new Date().toISOString().split("T")[0];
+    const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
+
+    const record = await Attendance.findOne({
+      where: {
+        [Op.and]: [
+          sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("employee_id")),
+            employee_id.toLowerCase().trim()
+          ),
+          { date: { [Op.or]: [today, utcToday] } }
+        ]
+      },
+    });
+
+    if (!record || !record.check_in || record.check_in === "—") {
+      return { success: false, error: "Please check in before checking out" };
+    }
+
+    if (record.check_out && record.check_out !== "—") {
+      const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+      return { success: true, message: "Already checked out today", record: responseRecord, alreadyCheckedOut: true };
+    }
+
+    // Calculate work hours using IST timestamps
+    const inDate = new Date(`${record.date}T${record.check_in}+05:30`);
+    const outDate = new Date(`${today}T${timeStr}+05:30`);
+    const diffMs = Math.max(0, outDate - inDate);
+    const diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+
+    await record.update({
+      check_out: timeStr,
+      work_hours: diffHrs,
+    });
+
+    const responseRecord = record.toJSON ? record.toJSON() : { ...record };
+    return {
+      success: true,
+      message: `Checked out successfully at ${timeStr}. Work duration: ${diffHrs} hours.`,
+      record: responseRecord,
+      newCheckOut: true,
+    };
+  },
+
   // POST /api/auth/attendance/check-in
   async checkIn(req, res) {
     try {
       const { employee_id } = req.user;
-      const istNow = getISTParts();
-      const today = istNow.dateStr;
-      const utcToday = new Date().toISOString().split("T")[0];
-      const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
-
-      const user = await User.findOne({ where: { employee_id } });
-      if (!user) {
+      const result = await AttendanceController.performAutoCheckIn(employee_id);
+      if (!result) {
         return res.status(404).json({ error: "User profile not found" });
       }
-
-      let record = await Attendance.findOne({
-        where: {
-          employee_id,
-          date: { [Op.or]: [today, utcToday] },
-        },
-      });
-
-      if (record && record.check_in) {
-        return res.status(400).json({ error: "Already checked in today" });
-      }
-
-      // Check shift timing and determine if on-time (Present) or late (Late Present) in IST
-      const shiftInfo = await resolveShiftAndStatus(employee_id, today, utcToday, new Date());
-      const status = shiftInfo.status;
-      const late_count = shiftInfo.late_count;
-
-      const resolvedDept = (user.role === "hr" || user.role === "hrmanager" || user.role === "admin") ? "HR" : (user.dept || "Other");
-
-      if (!record) {
-        record = await Attendance.create({
-          employee_id,
-          name: user.name,
-          dept: resolvedDept,
-          date: today,
-          check_in: timeStr,
-          status,
-          late_count,
-        });
-      } else {
-        await record.update({
-          date: today,
-          check_in: timeStr,
-          status,
-          late_count,
-        });
-      }
-
-      const responseRecord = record.toJSON ? record.toJSON() : { ...record };
-      responseRecord.shift_name = shiftInfo.shift_name;
-      responseRecord.shift_start = shiftInfo.shift_start;
-      responseRecord.shift_end = shiftInfo.shift_end;
-
-      return res.json({
-        success: true,
-        message: `Checked in successfully at ${timeStr} (${status === "Present" ? "On Time" : "Late"})`,
-        record: responseRecord,
-      });
+      return res.json(result);
     } catch (err) {
       console.error("Check-in error:", err.message);
       return res.status(500).json({ error: "Failed to record check-in" });
@@ -597,42 +687,14 @@ const AttendanceController = {
   async checkOut(req, res) {
     try {
       const { employee_id } = req.user;
-      const istNow = getISTParts();
-      const today = istNow.dateStr;
-      const utcToday = new Date().toISOString().split("T")[0];
-      const timeStr = istNow.timeStr; // "HH:MM:SS" in IST!
-
-      const record = await Attendance.findOne({
-        where: {
-          employee_id,
-          date: { [Op.or]: [today, utcToday] },
-        },
-      });
-
-      if (!record || !record.check_in) {
-        return res.status(400).json({ error: "Please check in before checking out" });
+      const result = await AttendanceController.performAutoCheckOut(employee_id);
+      if (!result) {
+        return res.status(404).json({ error: "User profile not found" });
       }
-
-      if (record.check_out) {
-        return res.status(400).json({ error: "Already checked out today" });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
       }
-
-      // Calculate work hours using IST timestamps
-      const inDate = new Date(`${record.date}T${record.check_in}+05:30`);
-      const outDate = new Date(`${today}T${timeStr}+05:30`);
-      const diffMs = Math.max(0, outDate - inDate);
-      const diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
-
-      await record.update({
-        check_out: timeStr,
-        work_hours: diffHrs,
-      });
-
-      return res.json({
-        success: true,
-        message: `Checked out successfully at ${timeStr}. Work duration: ${diffHrs} hours.`,
-        record,
-      });
+      return res.json(result);
     } catch (err) {
       console.error("Check-out error:", err.message);
       return res.status(500).json({ error: "Failed to record check-out" });
@@ -660,7 +722,14 @@ const AttendanceController = {
       }
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isHodOrManager = role === "hod" || role === "manager";
+      const userDesig = (req.user?.designation || "").toLowerCase().trim();
+      const isLeadershipDesig =
+        /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(userDesig) ||
+        userDesig.includes("team lead") ||
+        userDesig.includes("tech lead") ||
+        userDesig.includes("department head") ||
+        userDesig.includes("head of");
+      const isHodOrManager = role === "hod" || role === "manager" || isLeadershipDesig;
 
       if (!isHrOrAdmin && !isHodOrManager) {
         return res.status(403).json({ error: "Only HR, Admin, or Team Leads can mark attendance manually" });

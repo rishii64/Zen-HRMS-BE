@@ -47,7 +47,7 @@ const EmployeeController = {
         work_email: user.work_email || user.email,
         personal_email: user.personal_email || "",
         employee_code: user.employee_id,
-        job_role: user.role,
+        job_role: (user.role && user.role.toLowerCase() === "employees") ? "employee" : user.role,
         status: user.status || (user.is_active ? "Active" : "Inactive"),
         current_salary: user.current_salary,
         dept: user.dept,
@@ -181,6 +181,9 @@ const EmployeeController = {
 
       const isActive = status === "Active";
 
+      const rawJobRole = job_role ? job_role.toLowerCase().trim() : "employee";
+      const resolvedJobRole = rawJobRole === "employees" ? "employee" : rawJobRole;
+
       const newUser = await User.create({
         employee_id: normalizedEmployeeCode,
         name: name.trim(),
@@ -191,7 +194,7 @@ const EmployeeController = {
         aadhaar_no: normalizedAadhaarNo,
         document_status: docStatus,
         password: passwordHash,
-        role: job_role ? job_role.toLowerCase().trim() : "employee",
+        role: resolvedJobRole,
         is_active: isActive,
         status: status || (isActive ? "Active" : "Inactive"),
         current_salary: current_salary ? parseFloat(current_salary) : null,
@@ -341,13 +344,16 @@ const EmployeeController = {
 
       const isActive = status === "Active";
 
+      const rawUpdateJobRole = job_role ? job_role.toLowerCase().trim() : "employee";
+      const resolvedUpdateJobRole = rawUpdateJobRole === "employees" ? "employee" : rawUpdateJobRole;
+
       const userUpdateFields = {
         name: name.trim(),
         ...(primaryEmail ? { email: primaryEmail, work_email: primaryEmail } : {}),
         ...(normalizedPersonalEmail !== undefined ? { personal_email: normalizedPersonalEmail } : {}),
         ...(pan_no !== undefined ? { pan_no: pan_no ? pan_no.toUpperCase().trim() : null } : {}),
         ...(aadhaar_no !== undefined ? { aadhaar_no: aadhaar_no ? aadhaar_no.trim() : null } : {}),
-        role: job_role ? job_role.toLowerCase().trim() : "employee",
+        role: resolvedUpdateJobRole,
         is_active: isActive,
         status: status || (isActive ? "Active" : "Inactive"),
         current_salary: current_salary ? parseFloat(current_salary) : null,
@@ -554,7 +560,7 @@ const EmployeeController = {
             ...(userUpdateFields.document_status !== undefined ? { document_status: userUpdateFields.document_status } : {}),
             ...(userUpdateFields.employment_type !== undefined ? { employment_type: userUpdateFields.employment_type } : {}),
             status: status || "Active",
-            job_role: job_role || "employee",
+            job_role: resolvedUpdateJobRole,
             dept: dept ? dept.trim() : null,
             designation: designation ? designation.trim() : null,
             ...(userUpdateFields.group_name !== undefined ? { group_name: userUpdateFields.group_name } : {}),
@@ -801,6 +807,7 @@ const EmployeeController = {
         role: user.role,
         is_active: user.is_active,
         status: statusValue,
+        employment_type: user.employment_type || "Permanent",
         current_salary: user.current_salary,
         department: user.dept,
         designation: user.designation,

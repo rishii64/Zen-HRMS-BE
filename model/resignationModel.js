@@ -213,6 +213,26 @@ module.exports = (sequelize) => {
         type: DataTypes.DATEONLY,
         allowNull: true,
       },
+      admin_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      admin_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
+      admin_decision: {
+        type: DataTypes.STRING(50),
+        allowNull: true, // "Approved", "Rejected", "Pending"
+      },
+      admin_comments: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      admin_action_date: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
       approval_stage: {
         type: DataTypes.STRING(50),
         allowNull: false,

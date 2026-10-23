@@ -48,6 +48,14 @@ const EmployeeController = require("./controller/employeeController");
 app.get("/api/salary/:code", EmployeeController.getSalaryStructure);
 app.post("/api/salary/:code", EmployeeController.updateSalaryStructure);
 
+const HrEventController = require("./controller/hrEventController");
+app.get("/api/hr-events", authenticate, HrEventController.getEvents);
+app.get("/api/hr-events/:id", authenticate, HrEventController.getEventById);
+app.post("/api/hr-events", authenticate, HrEventController.createEvent);
+app.put("/api/hr-events/:id", authenticate, HrEventController.updateEvent);
+app.delete("/api/hr-events/:id", authenticate, HrEventController.deleteEvent);
+app.post("/api/hr-events/:id/broadcast", authenticate, HrEventController.broadcastEvent);
+
 // Database connection
 db.connectDB()
   .then(() => {

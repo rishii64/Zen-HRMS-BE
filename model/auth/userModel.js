@@ -141,6 +141,12 @@ module.exports = (sequelize) => {
         defaultValue: "1,2,3,4",
       },
 
+      notice_acknowledged: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
       dob: {
         type: DataTypes.DATEONLY,
         allowNull: true,
