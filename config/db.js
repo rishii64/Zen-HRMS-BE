@@ -520,6 +520,38 @@ const connectDB = async () => {
       console.warn("Could not seed default holidays:", seedErr.message);
     }
 
+    // Automatically ensure hr_events table and columns exist
+    try {
+      await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS hr_events (
+          id SERIAL PRIMARY KEY,
+          company_name VARCHAR(150) NOT NULL DEFAULT 'Zentelex',
+          branch_location VARCHAR(150) NOT NULL DEFAULT 'Kolkata HQ',
+          address TEXT,
+          event_name VARCHAR(255) NOT NULL,
+          event_category VARCHAR(100) NOT NULL DEFAULT 'Event',
+          event_date DATE NOT NULL,
+          start_time VARCHAR(50) DEFAULT '10:00 AM',
+          end_time VARCHAR(50) DEFAULT '01:00 PM',
+          content TEXT NOT NULL,
+          sign_off VARCHAR(100) NOT NULL DEFAULT 'HR Team',
+          target_audience VARCHAR(100) NOT NULL DEFAULT 'All Employees',
+          status VARCHAR(50) NOT NULL DEFAULT 'Draft',
+          theme VARCHAR(50) NOT NULL DEFAULT 'purple',
+          created_by_id VARCHAR(50),
+          created_by_name VARCHAR(150),
+          created_by_role VARCHAR(50),
+          emails_sent_count INTEGER NOT NULL DEFAULT 0,
+          sent_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        ALTER TABLE hr_events ADD COLUMN IF NOT EXISTS theme VARCHAR(50) DEFAULT 'purple';
+      `);
+    } catch (thmErr) {
+      // ignore
+    }
+
     // Seed sample initial HR event if none exist
     try {
       const eCount = await HrEvent.count();
@@ -581,6 +613,16 @@ const connectDB = async () => {
         ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_action_date TIMESTAMPTZ;
       `);
     } catch (colErr) {
+      // ignore
+    }
+
+    // Automatically ensure training tables support company_logo_url
+    try {
+      await sequelize.query(`
+        ALTER TABLE training_programs ADD COLUMN IF NOT EXISTS company_logo_url TEXT;
+        ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS company_logo_url TEXT;
+      `);
+    } catch (trainColErr) {
       // ignore
     }
 
@@ -726,14 +768,6 @@ const connectDB = async () => {
       console.warn("Could not seed default training programs:", trainSeedErr.message);
     }
 
-    // Automatically ensure hr_events table has theme column
-    try {
-      await sequelize.query(`
-        ALTER TABLE hr_events ADD COLUMN IF NOT EXISTS theme VARCHAR(50) DEFAULT 'purple';
-      `);
-    } catch (thmErr) {
-      // ignore
-    }
 
     console.log("PG connected...");
   } catch (err) {
