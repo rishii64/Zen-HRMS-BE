@@ -603,6 +603,20 @@ const connectDB = async () => {
       // ignore
     }
 
+    // Automatically ensure users table has all required columns
+    try {
+      await sequelize.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS notice_acknowledged BOOLEAN DEFAULT false;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS facilities TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
+      `);
+    } catch (userColErr) {
+      // ignore
+    }
+
     // Automatically ensure resignations table has admin approval tracking columns
     try {
       await sequelize.query(`
