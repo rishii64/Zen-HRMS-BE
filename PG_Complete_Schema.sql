@@ -1415,3 +1415,35 @@ CREATE INDEX IF NOT EXISTS idx_training_submissions_prog_emp ON training_assessm
 CREATE INDEX IF NOT EXISTS idx_employee_certs_emp ON employee_certifications(employee_id);
 CREATE INDEX IF NOT EXISTS idx_employee_certs_status ON employee_certifications(status);
 
+-- ==========================================================================
+-- HR EVENTS TABLE & RECENT MIGRATION COLUMNS
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS hr_events (
+  id SERIAL PRIMARY KEY,
+  company_name VARCHAR(150) NOT NULL DEFAULT 'Zentelex',
+  branch_location VARCHAR(150) NOT NULL DEFAULT 'Kolkata HQ',
+  address TEXT,
+  event_name VARCHAR(255) NOT NULL,
+  event_category VARCHAR(100) NOT NULL DEFAULT 'Event',
+  event_date DATE NOT NULL,
+  start_time VARCHAR(50) DEFAULT '10:00 AM',
+  end_time VARCHAR(50) DEFAULT '01:00 PM',
+  content TEXT NOT NULL,
+  sign_off VARCHAR(100) NOT NULL DEFAULT 'HR Team',
+  target_audience VARCHAR(100) NOT NULL DEFAULT 'All Employees',
+  status VARCHAR(50) NOT NULL DEFAULT 'Draft',
+  theme VARCHAR(50) NOT NULL DEFAULT 'purple',
+  created_by_id VARCHAR(50),
+  created_by_name VARCHAR(150),
+  created_by_role VARCHAR(50),
+  emails_sent_count INTEGER NOT NULL DEFAULT 0,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE hr_events ADD COLUMN IF NOT EXISTS theme VARCHAR(50) DEFAULT 'purple';
+ALTER TABLE training_programs ADD COLUMN IF NOT EXISTS company_logo_url TEXT;
+ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS company_logo_url TEXT;
+
+
