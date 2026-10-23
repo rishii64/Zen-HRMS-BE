@@ -500,27 +500,6 @@ const AuthController = {
 
   // POST /api/auth/logout
   async logout(req, res) {
-    try {
-      let empId = req.user?.employee_id;
-      if (!empId) {
-        const rawToken = req.cookies?.token || (req.headers.authorization && req.headers.authorization.split(" ")[1]);
-        if (rawToken) {
-          try {
-            const decoded = jwt.verify(rawToken, process.env.JWT_SECRET, { ignoreExpiration: true });
-            empId = decoded?.employee_id;
-          } catch (_) {}
-        }
-      }
-      if (empId) {
-        const AttendanceController = require("./attendanceController");
-        if (AttendanceController.performAutoCheckOut) {
-          await AttendanceController.performAutoCheckOut(empId);
-        }
-      }
-    } catch (outErr) {
-      console.warn("Auto check-out on logout warning:", outErr.message);
-    }
-
     const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
     res.clearCookie("token", {
       path: "/",
