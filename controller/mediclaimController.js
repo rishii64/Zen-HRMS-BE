@@ -1,5 +1,67 @@
-const { MediclaimPolicy, MediclaimClaim, Employee, User, sequelize } = require("../config/db");
+const {
+  MediclaimPolicy,
+  MediclaimClaim,
+  MediclaimHighlight,
+  MediclaimHospital,
+  Employee,
+  User,
+  sequelize
+} = require("../config/db");
 const { Op } = require("sequelize");
+
+const DEFAULT_HIGHLIGHTS = [
+  {
+    title: "In-Patient Hospitalization",
+    badge: "100% Covered",
+    badge_color: "emerald",
+    description: "Boarding, nursing care, doctor visits, medicines, oxygen, blood, surgical appliances up to the sum insured.",
+    icon: "building",
+    order_index: 1,
+  },
+  {
+    title: "Pre & Post Hospitalization",
+    badge: "30 & 60 Days",
+    badge_color: "blue",
+    description: "Medical expenses incurred 30 days before admission and up to 60 days post-discharge (consultations, scans, tests).",
+    icon: "calendar",
+    order_index: 2,
+  },
+  {
+    title: "Day Care Treatments (500+ procedures)",
+    badge: "Included",
+    badge_color: "indigo",
+    description: "Procedures requiring less than 24h hospitalization due to advanced technology (Cataract, Dialysis, Chemotherapy, Radiotherapy).",
+    icon: "stethoscope",
+    order_index: 3,
+  },
+  {
+    title: "Maternity & Newborn Cover",
+    badge: "Up to ₹75,000",
+    badge_color: "rose",
+    description: "Normal delivery up to ₹50,000 and Caesarean (C-section) up to ₹75,000. Newborn baby covered from Day 1.",
+    icon: "heart",
+    order_index: 4,
+  },
+  {
+    title: "Room Rent & ICU Limits",
+    badge: "Single Private / No ICU Cap",
+    badge_color: "amber",
+    description: "Single private A/C room allowed or 1% of Sum Insured per day. ICU charges covered without sub-limits.",
+    icon: "shield",
+    order_index: 5,
+  },
+];
+
+const DEFAULT_HOSPITALS = [
+  { name: "Apollo Hospitals & Heart Centre", city: "Mumbai", area: "CBD Belapur", helpline: "+91 22 3350 3350", hospital_type: "Super Specialty", cashless: true },
+  { name: "Fortis Hiranandani Hospital", city: "Navi Mumbai", area: "Vashi", helpline: "+91 22 3919 9222", hospital_type: "Multi Specialty", cashless: true },
+  { name: "Kokilaben Dhirubhai Ambani Hospital", city: "Mumbai", area: "Andheri West", helpline: "+91 22 4269 6969", hospital_type: "Quaternary Care", cashless: true },
+  { name: "Lilavati Hospital & Research Centre", city: "Mumbai", area: "Bandra West", helpline: "+91 22 2675 1000", hospital_type: "Multi Specialty", cashless: true },
+  { name: "Manipal Hospital", city: "Bengaluru", area: "Old Airport Rd", helpline: "+91 80 2502 4444", hospital_type: "Multi Specialty", cashless: true },
+  { name: "Max Super Specialty Hospital", city: "Delhi NCR", area: "Saket", helpline: "+91 11 2651 5050", hospital_type: "Super Specialty", cashless: true },
+  { name: "Medanta - The Medicity", city: "Gurugram", area: "Sector 38", helpline: "+91 124 414 1414", hospital_type: "Multi Specialty", cashless: true },
+  { name: "IRIS MULTISPECIALITY HOSPITAL", city: "Kolkata", area: "Vidyasagar Colony", helpline: "+91 124 414 1414", hospital_type: "Multi Specialty", cashless: true },
+];
 
 const safeJsonParse = (str, fallback = []) => {
   if (!str) return fallback;
@@ -475,7 +537,7 @@ const MediclaimController = {
           plan_type: plan_type || "Corporate Group Floater Plan (1+3)",
         });
       } else {
-        if (sum_insured) policy.sum_insured = parseFloat(sum_insured);
+        if (sum_insured !== undefined && sum_insured !== null) policy.sum_insured = parseFloat(sum_insured);
         if (tpa_name) policy.tpa_name = tpa_name;
         if (insurance_company) policy.insurance_company = insurance_company;
         if (policy_number) policy.policy_number = policy_number;
@@ -491,6 +553,341 @@ const MediclaimController = {
     } catch (err) {
       console.error("managePolicy error:", err);
       return res.status(500).json({ success: false, error: "Failed to update employee policy" });
+    }
+  },
+
+  // ========================================================
+  // 1. COVERAGE HIGHLIGHTS MANAGEMENT (HR / Admin configurable)
+  // ========================================================
+
+  // GET /api/auth/mediclaim/highlights
+  async getHighlights(req, res) {
+    try {
+      let list = await MediclaimHighlight.findAll({
+        order: [["order_index", "ASC"], ["id", "ASC"]],
+      });
+
+      if (list.length === 0) {
+        await MediclaimHighlight.bulkCreate(DEFAULT_HIGHLIGHTS);
+        list = await MediclaimHighlight.findAll({
+          order: [["order_index", "ASC"], ["id", "ASC"]],
+        });
+      }
+
+      return res.json({ success: true, highlights: list });
+    } catch (err) {
+      console.error("getHighlights error:", err);
+      return res.status(500).json({ success: false, error: "Failed to retrieve coverage highlights" });
+    }
+  },
+
+  // POST /api/auth/mediclaim/highlights
+  async saveHighlights(req, res) {
+    try {
+      const { highlights } = req.body;
+      if (!Array.isArray(highlights)) {
+        return res.status(400).json({ success: false, error: "Highlights array is required" });
+      }
+
+      await MediclaimHighlight.destroy({ where: {} });
+      const formatted = highlights.map((h, idx) => ({
+        title: h.title?.trim() || "Coverage Benefit",
+        badge: h.badge?.trim() || "Covered",
+        badge_color: h.badge_color || "emerald",
+        description: h.description?.trim() || "",
+        icon: h.icon || "shield",
+        order_index: h.order_index !== undefined ? h.order_index : idx + 1,
+      }));
+
+      const created = await MediclaimHighlight.bulkCreate(formatted);
+      return res.json({
+        success: true,
+        message: "Coverage highlights updated successfully",
+        highlights: created,
+      });
+    } catch (err) {
+      console.error("saveHighlights error:", err);
+      return res.status(500).json({ success: false, error: "Failed to save coverage highlights" });
+    }
+  },
+
+  // POST /api/auth/mediclaim/highlights/reset
+  async resetHighlights(req, res) {
+    try {
+      await MediclaimHighlight.destroy({ where: {} });
+      const created = await MediclaimHighlight.bulkCreate(DEFAULT_HIGHLIGHTS);
+      return res.json({
+        success: true,
+        message: "Coverage highlights reset to default successfully",
+        highlights: created,
+      });
+    } catch (err) {
+      console.error("resetHighlights error:", err);
+      return res.status(500).json({ success: false, error: "Failed to reset coverage highlights" });
+    }
+  },
+
+  // ========================================================
+  // 2. CASHLESS HOSPITAL DIRECTORY (HR Upload & Categorical City Filtering)
+  // ========================================================
+
+  // GET /api/auth/mediclaim/hospitals
+  async getHospitals(req, res) {
+    try {
+      const { city, search } = req.query;
+
+      const whereClause = {};
+      if (city && city !== "All") {
+        whereClause.city = sequelize.where(
+          sequelize.fn("LOWER", sequelize.col("city")),
+          city.toLowerCase().trim()
+        );
+      }
+
+      if (search && search.trim()) {
+        const q = `%${search.trim().toLowerCase()}%`;
+        whereClause[Op.or] = [
+          sequelize.where(sequelize.fn("LOWER", sequelize.col("name")), { [Op.like]: q }),
+          sequelize.where(sequelize.fn("LOWER", sequelize.col("city")), { [Op.like]: q }),
+          sequelize.where(sequelize.fn("LOWER", sequelize.col("area")), { [Op.like]: q }),
+          sequelize.where(sequelize.fn("LOWER", sequelize.col("hospital_type")), { [Op.like]: q }),
+          sequelize.where(sequelize.fn("LOWER", sequelize.col("helpline")), { [Op.like]: q }),
+        ];
+      }
+
+      let hospitals = await MediclaimHospital.findAll({
+        where: whereClause,
+        order: [["city", "ASC"], ["name", "ASC"]],
+      });
+
+      // If database is completely empty, seed standard network hospitals
+      const totalCount = await MediclaimHospital.count();
+      if (totalCount === 0) {
+        await MediclaimHospital.bulkCreate(DEFAULT_HOSPITALS);
+        hospitals = await MediclaimHospital.findAll({
+          where: whereClause,
+          order: [["city", "ASC"], ["name", "ASC"]],
+        });
+      }
+
+      // Group distinct cities with count from the whole directory
+      const allHospitals = await MediclaimHospital.findAll({
+        attributes: ["city"],
+      });
+
+      const cityCounts = {};
+      allHospitals.forEach((h) => {
+        if (h.city) {
+          const c = h.city.trim();
+          cityCounts[c] = (cityCounts[c] || 0) + 1;
+        }
+      });
+
+      const distinctCities = Object.keys(cityCounts).sort().map((c) => ({
+        name: c,
+        count: cityCounts[c],
+      }));
+
+      return res.json({
+        success: true,
+        hospitals,
+        cities: distinctCities,
+        totalCount: allHospitals.length,
+      });
+    } catch (err) {
+      console.error("getHospitals error:", err);
+      return res.status(500).json({ success: false, error: "Failed to retrieve hospitals" });
+    }
+  },
+
+  // POST /api/auth/mediclaim/hospitals/upload
+  // Accepts bulk array from Excel/CSV upload
+  async uploadHospitals(req, res) {
+    try {
+      const { hospitals, mode = "append" } = req.body;
+      if (!Array.isArray(hospitals) || hospitals.length === 0) {
+        return res.status(400).json({ success: false, error: "Please provide a valid list of hospitals to upload" });
+      }
+
+      if (mode === "replace") {
+        await MediclaimHospital.destroy({ where: {} });
+      }
+
+      const cleanList = hospitals
+        .filter((h) => h && (h.name || h["Hospital Name"]) && (h.city || h["City"]))
+        .map((h) => {
+          const name = (h.name || h["Hospital Name"] || "").toString().trim();
+          const city = (h.city || h["City"] || "").toString().trim();
+          const area = (h.area || h["Area"] || h["Area / Locality"] || "").toString().trim();
+          const address = (h.address || h["Address"] || "").toString().trim();
+          const helpline = (h.helpline || h["Helpline"] || h["Contact Helpline"] || "+91 1800 425 9449").toString().trim();
+          const hospital_type = (h.hospital_type || h.type || h["Hospital Type"] || h["Type"] || "Multi Specialty").toString().trim();
+          const cashlessRaw = h.cashless !== undefined ? h.cashless : (h["Cashless Available"] !== undefined ? h["Cashless Available"] : true);
+          const cashless = cashlessRaw === true || cashlessRaw === "Yes" || cashlessRaw === "yes" || cashlessRaw === "true" || cashlessRaw === 1;
+
+          return {
+            name,
+            city,
+            area: area || null,
+            address: address || null,
+            helpline: helpline || "+91 1800 425 9449",
+            hospital_type: hospital_type || "Multi Specialty",
+            cashless,
+          };
+        });
+
+      if (cleanList.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "No valid hospital rows found in the uploaded data. Ensure 'Hospital Name' and 'City' columns exist.",
+        });
+      }
+
+      const inserted = await MediclaimHospital.bulkCreate(cleanList);
+
+      return res.json({
+        success: true,
+        message: `Successfully ${mode === "replace" ? "replaced directory with" : "added"} ${inserted.length} hospital(s)`,
+        count: inserted.length,
+      });
+    } catch (err) {
+      console.error("uploadHospitals error:", err);
+      return res.status(500).json({ success: false, error: "Failed to upload hospital directory" });
+    }
+  },
+
+  // POST /api/auth/mediclaim/hospitals
+  async createHospital(req, res) {
+    try {
+      const { name, city, area, address, helpline, cashless, hospital_type } = req.body;
+      if (!name || !city) {
+        return res.status(400).json({ success: false, error: "Hospital name and city are required" });
+      }
+
+      const hosp = await MediclaimHospital.create({
+        name: name.trim(),
+        city: city.trim(),
+        area: area ? area.trim() : null,
+        address: address ? address.trim() : null,
+        helpline: helpline ? helpline.trim() : "+91 1800 425 9449",
+        cashless: cashless !== false,
+        hospital_type: hospital_type ? hospital_type.trim() : "Multi Specialty",
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: `Hospital "${hosp.name}" added successfully`,
+        hospital: hosp,
+      });
+    } catch (err) {
+      console.error("createHospital error:", err);
+      return res.status(500).json({ success: false, error: "Failed to add hospital" });
+    }
+  },
+
+  // DELETE /api/auth/mediclaim/hospitals/:id
+  async deleteHospital(req, res) {
+    try {
+      const { id } = req.params;
+      const hosp = await MediclaimHospital.findByPk(id);
+      if (!hosp) {
+        return res.status(404).json({ success: false, error: "Hospital not found" });
+      }
+      await hosp.destroy();
+      return res.json({ success: true, message: `Hospital "${hosp.name}" removed successfully` });
+    } catch (err) {
+      console.error("deleteHospital error:", err);
+      return res.status(500).json({ success: false, error: "Failed to delete hospital" });
+    }
+  },
+
+  // ========================================================
+  // 3. EMPLOYEE TOTAL HEALTH COVERAGE MANAGEMENT (HR Desk)
+  // ========================================================
+
+  // GET /api/auth/mediclaim/employees-coverage
+  async getEmployeesCoverage(req, res) {
+    try {
+      const { search, dept } = req.query;
+
+      const andConditions = [{ status: "Active" }];
+
+      if (dept && dept !== "All") {
+        andConditions.push(
+          sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("Employee.dept")),
+            dept.trim().toLowerCase()
+          )
+        );
+      }
+
+      if (search && search.trim()) {
+        const q = `%${search.trim().toLowerCase()}%`;
+        andConditions.push({
+          [Op.or]: [
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("Employee.employee_id")), { [Op.like]: q }),
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("Employee.first_name")), { [Op.like]: q }),
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("Employee.last_name")), { [Op.like]: q }),
+            sequelize.where(sequelize.fn("LOWER", sequelize.col("Employee.email")), { [Op.like]: q }),
+          ],
+        });
+      }
+
+      const employees = await Employee.findAll({
+        where: {
+          [Op.and]: andConditions,
+        },
+        include: [
+          {
+            model: MediclaimPolicy,
+            as: "mediclaimPolicy",
+            required: false,
+          },
+        ],
+        order: [["id", "ASC"]],
+      });
+
+      const list = employees.map((emp) => {
+        const pol = emp.mediclaimPolicy;
+        const cleanEmpNum = emp.employee_id.replace(/\D/g, "") || String(emp.id || 1000);
+        return {
+          id: emp.id,
+          employee_id: emp.employee_id,
+          name: `${emp.first_name || ""} ${emp.last_name || ""}`.trim() || emp.employee_id,
+          email: emp.email || emp.work_email || "",
+          department: emp.dept || emp.department || "General",
+          designation: emp.designation || "Staff",
+          profile_photo: emp.profile_photo || "",
+          policy_id: pol?.id || null,
+          policy_number: pol?.policy_number || `GHI-ZEN-${new Date().getFullYear()}-${cleanEmpNum.padStart(4, "0")}`,
+          sum_insured: pol ? parseFloat(pol.sum_insured) : 500000.0,
+          plan_type: pol?.plan_type || "Corporate Group Floater Plan (1+3)",
+          tpa_name: pol?.tpa_name || "Medi Assist TPA Services",
+          insurance_company: pol?.insurance_company || "ICICI Lombard GIC Ltd",
+          status: pol?.status || "Active",
+        };
+      });
+
+      // Fetch all distinct active departments for the filter dropdown
+      const allDepts = await Employee.findAll({
+        where: { status: "Active" },
+        attributes: ["dept"],
+        group: ["dept"],
+      });
+      const distinctDepts = allDepts
+        .map((d) => d.dept)
+        .filter(Boolean)
+        .sort();
+
+      return res.json({
+        success: true,
+        employees: list,
+        departments: distinctDepts,
+        count: list.length,
+      });
+    } catch (err) {
+      console.error("getEmployeesCoverage error:", err);
+      return res.status(500).json({ success: false, error: "Failed to retrieve employee coverage details" });
     }
   },
 };

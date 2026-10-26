@@ -164,6 +164,20 @@ router.patch("/mediclaim/claim/:id/review", authenticate, authorizeRoles("hr", "
 router.get("/mediclaim/stats", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getMediclaimStats);
 router.post("/mediclaim/policy/manage", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.managePolicy);
 
+// Mediclaim Highlights (Viewable by all, editable by HR)
+router.get("/mediclaim/highlights", authenticate, MediclaimController.getHighlights);
+router.post("/mediclaim/highlights", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.saveHighlights);
+router.post("/mediclaim/highlights/reset", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.resetHighlights);
+
+// Mediclaim Hospital Directory (Viewable by all with city filtering, upload & manage by HR)
+router.get("/mediclaim/hospitals", authenticate, MediclaimController.getHospitals);
+router.post("/mediclaim/hospitals/upload", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.uploadHospitals);
+router.post("/mediclaim/hospitals", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.createHospital);
+router.delete("/mediclaim/hospitals/:id", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.deleteHospital);
+
+// Mediclaim Employee Coverage (Sum Insured) Desk (HR only)
+router.get("/mediclaim/employees-coverage", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getEmployeesCoverage);
+
 // ==========================================
 // KPI & Performance Management Routes
 // ==========================================
