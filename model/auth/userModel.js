@@ -83,6 +83,22 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(100),
         allowNull: true,
       },
+      department_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      designation_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      grade_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      reporting_manager_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
 
       group_name: {
         type: DataTypes.STRING(100),

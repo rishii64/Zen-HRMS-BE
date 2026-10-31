@@ -531,7 +531,26 @@ const sendHREventAnnouncementEmail = async ({
   }
 };
 
+const sendMail = async ({ to, subject, html, attachments = [] }) => {
+  const mailOptions = {
+    from: `"HR Department - Zentelex" <${process.env.SMTP_MAIL || "recruitment@zentelex.com"}>`,
+    to: (to || "").toLowerCase().trim(),
+    subject,
+    html,
+    attachments,
+  };
+
+  try {
+    return await transporter.sendMail(mailOptions);
+  } catch (err) {
+    console.error("Nodemailer generic sendMail error:", err.message);
+    throw err;
+  }
+};
+
 module.exports = {
+  transporter,
+  sendMail,
   sendOTPEmail,
   sendCredentialsEmail,
   sendInterviewScheduleEmail,

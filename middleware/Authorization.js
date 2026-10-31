@@ -35,7 +35,7 @@ const isHODOrManagerDesignation = (designation = "") => {
 const isDepartmentLeader = (user = {}) => {
   if (!user) return false;
   const role = (user.role || "").toLowerCase().trim();
-  if (["admin", "management", "ceo", "coo", "cto", "cfo", "vp", "secretary", "hr", "hrmanager"].includes(role)) {
+  if (["admin", "management", "ceo", "coo", "cto", "cfo", "vp", "secretary", "hr", "hrmanager", "chro", "vphr"].includes(role)) {
     return true;
   }
   if (["hod", "manager", "teamlead"].includes(role)) {
@@ -48,7 +48,7 @@ const isDepartmentLeader = (user = {}) => {
 const isHODOrManager = (user = {}) => {
   if (!user) return false;
   const role = (user.role || "").toLowerCase().trim();
-  if (["admin", "management", "ceo", "coo", "cto", "cfo", "vp", "secretary", "hr", "hrmanager"].includes(role)) {
+  if (["admin", "management", "ceo", "coo", "cto", "cfo", "vp", "secretary", "hr", "hrmanager", "chro", "vphr"].includes(role)) {
     return true;
   }
   if (["hod", "manager"].includes(role)) {
@@ -114,22 +114,35 @@ const authorizeRoles = (...roles) => {
     }
 
     // 2. Admin & Executive Management bypass
-    if (["admin", "management", "ceo", "coo"].includes(effectiveRole)) {
+    if (["admin", "management", "ceo", "coo", "chro", "vphr"].includes(effectiveRole)) {
       return next();
     }
 
     // 3. Designation-based authorization across all RBAC modules
-    const desig = (req.user.designation || "").trim();
+    const desig = (req.user?.designation || "").trim();
+    const dept = (req.user?.dept || "").toLowerCase().trim();
     const isLead = isLeadershipDesignation(desig);
     const isHodMgr = isHODOrManagerDesignation(desig);
 
+    // If route allows "chro" and user has CHRO / VP HR designation or role
+    const isChroDesig = /\b(chro|vp hr|vp-hr|vp - hr)\b/i.test(desig) || desig.includes("chief human resources officer") || desig.includes("head of hr") || desig.includes("vice president hr");
+    if (normalizedAllowed.includes("chro") && (isChroDesig || effectiveRole === "chro" || effectiveRole === "vphr")) {
+      return next();
+    }
+
+    // If route allows "gm_hr" or General Manager - HR
+    const isGmHr = (dept.includes("human resource") || dept === "hr") && (/\b(general manager|gm|gm-hr|gm - hr)\b/i.test(desig) || desig.includes("general manager - hr"));
+    if ((normalizedAllowed.includes("gm_hr") || normalizedAllowed.includes("gm")) && (isGmHr || isChroDesig || effectiveRole === "chro")) {
+      return next();
+    }
+
     // If route allows "hod" and user has HOD/Manager/AGM/DGM/GM/Director designation
-    if (normalizedAllowed.includes("hod") && (isHodMgr || isLead)) {
+    if (normalizedAllowed.includes("hod") && (isHodMgr || isLead || req.user?.is_hod || (req.user?.rank_level && req.user.rank_level >= 6))) {
       return next();
     }
 
     // If route allows "manager" and user has Manager/HOD/AGM/DGM/GM/Director designation
-    if (normalizedAllowed.includes("manager") && (isHodMgr || isLead)) {
+    if (normalizedAllowed.includes("manager") && (isHodMgr || isLead || (req.user?.rank_level && req.user.rank_level >= 6))) {
       return next();
     }
 

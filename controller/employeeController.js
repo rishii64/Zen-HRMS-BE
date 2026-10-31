@@ -1,4 +1,4 @@
-const { User, Employee, Attendance, Resignation } = require("../config/db");
+const { User, Employee, Attendance, Resignation, Department, JobGrade, Designation } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const bcrypt = require("bcryptjs");
@@ -37,6 +37,26 @@ const EmployeeController = {
   async getAllEmployees(req, res) {
     try {
       const users = await User.findAll({
+        include: [
+          {
+            model: JobGrade,
+            as: "gradeProfile",
+            attributes: ["id", "grade_code", "grade_name", "rank_level", "min_salary", "max_salary", "notice_period_days"],
+            required: false,
+          },
+          {
+            model: Designation,
+            as: "designationProfile",
+            attributes: ["id", "title", "code", "is_hod_role", "job_family"],
+            required: false,
+          },
+          {
+            model: Department,
+            as: "departmentProfile",
+            attributes: ["id", "dept_code", "dept_name"],
+            required: false,
+          }
+        ],
         order: [["id", "ASC"]]
       });
 
@@ -52,6 +72,20 @@ const EmployeeController = {
         current_salary: user.current_salary,
         dept: user.dept,
         designation: user.designation,
+        department_id: user.department_id,
+        designation_id: user.designation_id,
+        grade_id: user.grade_id,
+        reporting_manager_id: user.reporting_manager_id,
+        grade: user.gradeProfile ? {
+          id: user.gradeProfile.id,
+          grade_code: user.gradeProfile.grade_code,
+          grade_name: user.gradeProfile.grade_name,
+          rank_level: user.gradeProfile.rank_level,
+          min_salary: user.gradeProfile.min_salary,
+          max_salary: user.gradeProfile.max_salary,
+          notice_period_days: user.gradeProfile.notice_period_days,
+        } : null,
+        is_hod: (user.designationProfile && user.designationProfile.is_hod_role) || (user.gradeProfile && user.gradeProfile.rank_level >= 6),
         group_name: user.group_name || "TATA Company",
         company_name: user.company_name || "TATA Steel",
         work_location: user.work_location || "Kolkata",
@@ -164,6 +198,43 @@ const EmployeeController = {
         tabsString = enabled_tabs;
       }
 
+      // Auto-resolve Department, Designation, and Grade IDs
+      let resolvedDeptId = req.body.department_id ? parseInt(req.body.department_id, 10) : null;
+      let resolvedDesigId = req.body.designation_id ? parseInt(req.body.designation_id, 10) : null;
+      let resolvedGradeId = req.body.grade_id ? parseInt(req.body.grade_id, 10) : null;
+      const reportingManagerId = req.body.reporting_manager_id || null;
+
+      if (!resolvedDeptId && dept) {
+        try {
+          const matchedD = await Department.findOne({
+            where: {
+              [Op.or]: [
+                { dept_name: { [Op.iLike]: dept.trim() } },
+                { dept_code: { [Op.iLike]: dept.trim() } }
+              ]
+            }
+          });
+          if (matchedD) resolvedDeptId = matchedD.id;
+        } catch (_) {}
+      }
+
+      if (!resolvedDesigId && designation) {
+        try {
+          const matchedDes = await Designation.findOne({
+            where: {
+              [Op.or]: [
+                { title: { [Op.iLike]: designation.trim() } },
+                { code: { [Op.iLike]: designation.trim() } }
+              ]
+            }
+          });
+          if (matchedDes) {
+            resolvedDesigId = matchedDes.id;
+            if (!resolvedGradeId) resolvedGradeId = matchedDes.grade_id;
+          }
+        } catch (_) {}
+      }
+
       const isPermanentEmp = (req.body.employment_type || "Permanent").toLowerCase() === "permanent";
       let facilitiesData = req.body.facilities;
       if (!facilitiesData) {
@@ -205,8 +276,16 @@ const EmployeeController = {
         work_location: work_location ? work_location.trim() : "Kolkata",
         joining_date: joining_date || null,
         reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+        department_id: resolvedDeptId,
+        designation_id: resolvedDesigId,
+        grade_id: resolvedGradeId,
+        reporting_manager_id: reportingManagerId,
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
+            department_id: resolvedUpdateDeptId,
+            designation_id: resolvedUpdateDesigId,
+            grade_id: resolvedUpdateGradeId,
+            reporting_manager_id: userUpdateFields.reporting_manager_id !== undefined ? userUpdateFields.reporting_manager_id : emp.reporting_manager_id,
         employment_type: req.body.employment_type || "Permanent",
         tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
         enabled_tabs: tabsString || "1,2,3,4",
@@ -240,6 +319,10 @@ const EmployeeController = {
           current_salary: current_salary ? parseFloat(current_salary) : null,
           joining_date: joining_date || null,
           reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+        department_id: resolvedDeptId,
+        designation_id: resolvedDesigId,
+        grade_id: resolvedGradeId,
+        reporting_manager_id: reportingManagerId,
           phone_no: phone_no ? phone_no.trim() : null,
           kpi: kpi ? kpi.trim() : null,
           employment_type: req.body.employment_type || "Permanent",
@@ -434,7 +517,50 @@ const EmployeeController = {
         }
 
         const adj = existingStructure?.adjustments || {};
-        const isPerm = userUpdateFields.employment_type
+        // Auto-resolve Department, Designation, and Grade IDs on update
+      let resolvedUpdateDeptId = req.body.department_id !== undefined ? (req.body.department_id ? parseInt(req.body.department_id, 10) : null) : user.department_id;
+      let resolvedUpdateDesigId = req.body.designation_id !== undefined ? (req.body.designation_id ? parseInt(req.body.designation_id, 10) : null) : user.designation_id;
+      let resolvedUpdateGradeId = req.body.grade_id !== undefined ? (req.body.grade_id ? parseInt(req.body.grade_id, 10) : null) : user.grade_id;
+
+      if (!resolvedUpdateDeptId && dept) {
+        try {
+          const matchedD = await Department.findOne({
+            where: {
+              [Op.or]: [
+                { dept_name: { [Op.iLike]: dept.trim() } },
+                { dept_code: { [Op.iLike]: dept.trim() } }
+              ]
+            }
+          });
+          if (matchedD) resolvedUpdateDeptId = matchedD.id;
+        } catch (_) {}
+      }
+
+      if (!resolvedUpdateDesigId && designation) {
+        try {
+          const matchedDes = await Designation.findOne({
+            where: {
+              [Op.or]: [
+                { title: { [Op.iLike]: designation.trim() } },
+                { code: { [Op.iLike]: designation.trim() } }
+              ]
+            }
+          });
+          if (matchedDes) {
+            resolvedUpdateDesigId = matchedDes.id;
+            if (!resolvedUpdateGradeId) resolvedUpdateGradeId = matchedDes.grade_id;
+          }
+        } catch (_) {}
+      }
+
+      userUpdateFields.department_id = resolvedUpdateDeptId;
+      userUpdateFields.designation_id = resolvedUpdateDesigId;
+      userUpdateFields.grade_id = resolvedUpdateGradeId;
+      if (req.body.reporting_manager_id !== undefined) {
+        userUpdateFields.reporting_manager_id = req.body.reporting_manager_id || null;
+      }
+
+      const isPerm = userUpdateFields.employment_type
           ? String(userUpdateFields.employment_type).toLowerCase() === "permanent"
           : (user.employment_type || "Permanent").toLowerCase() === "permanent";
         const empTypeStr = isPerm ? "Permanent" : (userUpdateFields.employment_type || user.employment_type || "Permanent");
@@ -811,6 +937,10 @@ const EmployeeController = {
         current_salary: user.current_salary,
         department: user.dept,
         designation: user.designation,
+        department_id: user.department_id,
+        designation_id: user.designation_id,
+        grade_id: user.grade_id,
+        reporting_manager_id: user.reporting_manager_id,
         joining_date: user.joining_date,
         reporting_manager: user.reporting_manager,
         phone_no: user.phone_no,

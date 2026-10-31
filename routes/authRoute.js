@@ -16,9 +16,22 @@ const HolidayController = require("../controller/holidayController");
 const AdminTaskController = require("../controller/adminTaskController");
 const HrEventController = require("../controller/hrEventController");
 const TrainingController = require("../controller/trainingController");
+const BiometricController = require("../controller/biometricController");
+const FnfController = require("../controller/fnfController");
+const OfferController = require("../controller/offerController");
+const ClaimController = require("../controller/claimController");
+const OrganizationController = require("../controller/organizationController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
+
+// Middleware to permit hardware push via device key or token
+const optionalDeviceAuth = (req, res, next) => {
+  if (req.headers["x-device-key"] || req.query.api_key || req.body?.api_key) {
+    return next();
+  }
+  return authenticate(req, res, next);
+};
 
 const router = express.Router();
 
@@ -88,6 +101,20 @@ router.post("/attendance/auto-clock-out", authenticateAllowExpired, AttendanceCo
 router.post("/attendance/portal-logout", authenticateAllowExpired, AttendanceController.portalLogout);
 router.post("/attendance/mark", authenticate, AttendanceController.markManualAttendance);
 
+// Biometric Hardware & Real-Time Sync routes
+router.post("/attendance/biometric/punch", optionalDeviceAuth, BiometricController.recordPunch);
+router.post("/attendance/biometric/batch-sync", optionalDeviceAuth, BiometricController.batchSyncPunches);
+router.post("/attendance/biometric/import-file", authenticate, BiometricController.importPunchFile);
+router.get("/attendance/biometric/devices", authenticate, BiometricController.getDevices);
+router.post("/attendance/biometric/devices", authenticate, BiometricController.createDevice);
+router.put("/attendance/biometric/devices/:id", authenticate, BiometricController.updateDevice);
+router.delete("/attendance/biometric/devices/:id", authenticate, BiometricController.deleteDevice);
+router.post("/attendance/biometric/devices/:id/test-ping", authenticate, BiometricController.testPingDevice);
+router.post("/attendance/biometric/devices/:id/regenerate-key", authenticate, BiometricController.generateDeviceKey);
+router.get("/attendance/biometric/punches", authenticate, BiometricController.getPunches);
+router.post("/attendance/biometric/map-user", authenticate, BiometricController.mapBiometricUser);
+router.get("/attendance/biometric/stats", authenticate, BiometricController.getBiometricStats);
+
 // Work Schedule & Shift Planning routes
 router.get("/schedule", authenticate, ScheduleController.getSchedule);
 router.post("/schedule/create", authenticate, ScheduleController.createSchedule);
@@ -107,6 +134,17 @@ router.get("/leave/balance", authenticate, LeaveController.getLeaveBalance);
 router.post("/leave/apply", authenticate, upload.single("doc_url"), LeaveController.applyLeave);
 router.patch("/leave/:id/status", authenticate, LeaveController.updateLeaveStatus);
 router.delete("/leave/:id/cancel", authenticate, LeaveController.cancelLeave);
+
+// Leave Allocation & Carry-Forward Engine (HR / Admin)
+// Rules: Only Earned Leaves (EL) & Privilege Leaves (PL) carry forward up to 3 years (stacking up to 45 leaves, beyond which is lapsed).
+router.get("/leave/allocations", authenticate, LeaveController.getAllocations);
+router.post("/leave/allocate/individual", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), LeaveController.allocateIndividual);
+router.post("/leave/allocate/bulk", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), LeaveController.allocateBulk);
+router.post("/leave/cleanup-gender-allocations", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), LeaveController.cleanupGenderAllocations);
+router.post("/leave/process-carry-forward", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), LeaveController.processCarryForward);
+router.get("/leave/carry-forward-history/:employeeId", authenticate, LeaveController.getCarryForwardHistory);
+router.get("/leave/policies", authenticate, LeaveController.getLeavePolicies);
+router.put("/leave/policies/:code", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), LeaveController.updateLeavePolicy);
 
 // Resignation & Separation routes
 router.get("/resignation", authenticate, ResignationController.getResignations);
@@ -135,6 +173,59 @@ router.post("/resignation/:id/raise-exit-interview", authenticate, ResignationCo
 router.patch("/resignation/:id/submit-exit-interview", authenticate, ResignationController.submitExitInterview);
 
 router.delete("/resignation/:id/cancel", authenticate, ResignationController.cancelResignation);
+
+// ==========================================
+// Full & Final (F&F) Settlement & Letters Routes
+// ==========================================
+router.get("/fnf", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "hrmanager", "ceo", "coo"), FnfController.getSettlements);
+router.get("/fnf/my", authenticate, FnfController.getMySettlement);
+router.get("/fnf/eligible-resignations", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "hrmanager", "ceo", "coo"), FnfController.getEligibleResignations);
+router.get("/fnf/preview/:resignationId", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "hrmanager", "ceo", "coo"), FnfController.previewSettlement);
+router.post("/fnf/calculate", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "hrmanager", "ceo", "coo"), FnfController.calculateSettlement);
+router.post("/fnf/save", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "hrmanager", "ceo", "coo"), FnfController.saveSettlement);
+router.patch("/fnf/:id/finalize", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), FnfController.finalizeSettlement);
+router.patch("/fnf/:id/disburse", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "hrmanager", "ceo", "coo"), FnfController.disburseSettlement);
+router.get("/fnf/letter/:type/:id", authenticate, FnfController.getExitLetterData);
+router.delete("/fnf/:id", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), FnfController.deleteSettlement);
+
+// Offer Management & Candidate Digital Acceptance
+router.get("/offers", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "hrmanager", "ceo", "coo"), OfferController.getOffers);
+router.get("/offers/:id", authenticate, OfferController.getOfferById);
+router.post("/offers/calculate-structure", authenticate, OfferController.calculateStructure);
+router.post("/offers", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), OfferController.createOffer);
+router.put("/offers/:id", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), OfferController.updateOffer);
+router.post("/offers/:id/approve", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "hrmanager", "ceo", "coo"), OfferController.approveOffer);
+router.post("/offers/:id/send", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), OfferController.sendOfferToCandidate);
+router.delete("/offers/:id", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), OfferController.deleteOffer);
+
+// Public Candidate Acceptance routes (Token secured, no login required)
+router.get("/offers/candidate-view/:token", OfferController.getCandidateOfferByToken);
+router.post("/offers/candidate-respond/:token", OfferController.candidateRespondOffer);
+
+// =========================================================================
+// Employee Claims & Reimbursement Module
+// =========================================================================
+// 1. Employee self-service
+router.get("/claims/my", authenticate, ClaimController.getMyClaims);
+router.post("/claims", authenticate, ClaimController.createClaim);
+router.post("/claims/upload-receipt", authenticate, upload.single("receipt"), ClaimController.uploadReceipt);
+router.get("/claims/:id", authenticate, ClaimController.getClaimById);
+router.put("/claims/:id", authenticate, ClaimController.updateClaim);
+router.delete("/claims/:id", authenticate, ClaimController.deleteClaim);
+router.post("/claims/:id/cancel", authenticate, ClaimController.cancelClaim);
+
+// 2. Manager / HOD review
+router.get("/claims/workflow/manager-pending", authenticate, authorizeRoles("hod", "manager", "teamlead", "hr", "admin", "ceo", "coo", "hrmanager"), ClaimController.getManagerPendingClaims);
+router.post("/claims/:id/manager-review", authenticate, authorizeRoles("hod", "manager", "teamlead", "hr", "admin", "ceo", "coo", "hrmanager"), ClaimController.managerReviewClaim);
+
+// 3. Finance / Accounts review & disbursement
+router.get("/claims/workflow/finance-pending", authenticate, authorizeRoles("accounts", "payroll", "finance", "hr", "admin", "ceo", "coo", "cfo", "management"), ClaimController.getFinancePendingClaims);
+router.post("/claims/:id/finance-review", authenticate, authorizeRoles("accounts", "payroll", "finance", "hr", "admin", "ceo", "coo", "cfo", "management"), ClaimController.financeReviewClaim);
+router.post("/claims/:id/disburse", authenticate, authorizeRoles("accounts", "payroll", "finance", "hr", "admin", "ceo", "coo", "cfo", "management"), ClaimController.disburseClaim);
+
+// 4. HR Global Oversight & Analytics
+router.get("/claims/oversight/all", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo", "management"), ClaimController.getAllClaims);
+router.post("/claims/:id/hr-override", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo", "management"), ClaimController.hrOverrideClaim);
 
 // HOD Dashboard routes
 router.get("/hod/dashboard-stats", authenticate, HODController.getDashboardStats);
@@ -225,11 +316,16 @@ router.delete("/kpi/reviews/:id", authenticate, authorizeRoles("hr", "admin"), K
 // Recruitment & Hiring Process Routes
 // ==========================================
 
-// Requisition Management (HOD / HR / Admin)
-router.post("/recruitment/requisitions", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), upload.single("approval_document"), RecruitmentController.createRequisition);
-router.get("/recruitment/requisitions", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getRequisitions);
-router.get("/recruitment/requisitions/:id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.getRequisitionById);
-router.put("/recruitment/requisitions/:id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "ceo", "coo", "hrmanager"), RecruitmentController.updateRequisition);
+// Requisition Management (HODs of All Departments / HR / Admin / CHRO)
+router.post("/recruitment/requisitions", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "teamlead", "ceo", "coo", "hrmanager", "chro", "vphr", "accounts", "sales", "operations", "employee"), upload.single("approval_document"), RecruitmentController.createRequisition);
+router.get("/recruitment/requisitions", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "teamlead", "ceo", "coo", "hrmanager", "chro", "vphr", "accounts", "sales", "operations", "employee"), RecruitmentController.getRequisitions);
+router.get("/recruitment/requisitions/:id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "teamlead", "ceo", "coo", "hrmanager", "chro", "vphr", "accounts", "sales", "operations", "employee"), RecruitmentController.getRequisitionById);
+router.put("/recruitment/requisitions/:id", authenticate, authorizeRoles("hod", "hr", "admin", "manager", "teamlead", "ceo", "coo", "hrmanager", "chro", "vphr"), RecruitmentController.updateRequisition);
+
+// CHRO / VP HR Finalization of Requisitions (or Delegated General Manager - HR)
+router.post("/recruitment/requisitions/:id/finalize", authenticate, authorizeRoles("chro", "vphr", "hr", "admin", "hrmanager", "ceo", "coo", "management", "gm_hr", "gm", "employee"), RecruitmentController.finalizeRequisition);
+router.post("/recruitment/requisitions/:id/delegate", authenticate, authorizeRoles("chro", "vphr", "admin", "management", "hr", "hrmanager"), RecruitmentController.delegateFinalizer);
+router.get("/recruitment/eligible-finalizers", authenticate, authorizeRoles("chro", "vphr", "admin", "management", "hr", "hrmanager"), RecruitmentController.getEligibleFinalizers);
 
 // CEO / COO Approval for Unbudgeted Recruitment
 router.post("/recruitment/requisitions/:id/request-approval", authenticate, authorizeRoles("hr", "admin", "hod", "hrmanager"), RecruitmentController.requestCeoApproval);
@@ -353,6 +449,26 @@ router.post("/training/onboarding/:employeeId/assign", authenticate, authorizeRo
 // Reports & Exports
 router.get("/training/reports", authenticate, TrainingController.getTrainingReportsData);
 
+// ==========================================
+// Organization Structure & Department Masters
+// ==========================================
+router.get("/organization/structure", OrganizationController.getOrganizationStructure);
+
+// Departments
+router.get("/departments", OrganizationController.getDepartments);
+router.post("/departments", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.createDepartment);
+router.put("/departments/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.updateDepartment);
+router.delete("/departments/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.deleteDepartment);
+
+// Job Grades
+router.get("/job-grades", OrganizationController.getJobGrades);
+router.post("/job-grades", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.createJobGrade);
+router.put("/job-grades/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.updateJobGrade);
+
+// Designations
+router.get("/designations", OrganizationController.getDesignations);
+router.post("/designations", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.createDesignation);
+router.put("/designations/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.updateDesignation);
+router.delete("/designations/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.deleteDesignation);
+
 module.exports = router;
-
-

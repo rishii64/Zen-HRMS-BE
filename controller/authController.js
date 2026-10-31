@@ -208,7 +208,36 @@ const AuthController = {
         } catch (_) {}
       }
 
-      // Create JWT token including designation for RBAC
+      // Resolve Job Grade & HOD status
+      let rankLevel = 1;
+      let gradeCode = "L1";
+      let isHod = Boolean(user.is_hod);
+
+      try {
+        const { JobGrade: JG, Designation: DS } = require("../config/db");
+        if (user.grade_id) {
+          const g = await JG.findByPk(user.grade_id);
+          if (g) {
+            rankLevel = g.rank_level;
+            gradeCode = g.grade_code;
+          }
+        }
+        if (user.designation_id) {
+          const d = await DS.findByPk(user.designation_id);
+          if (d && d.is_hod_role) {
+            isHod = true;
+          }
+        }
+      } catch (_) {}
+
+      if (!isHod && rankLevel >= 6) {
+        isHod = true;
+      }
+      if (!isHod && /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor|chro|vp|cfo|coo|cto)\b/i.test(userDesignation)) {
+        isHod = true;
+      }
+
+      // Create JWT token including designation & leadership rank for RBAC
       const token = jwt.sign(
         {
           id: user.id,
@@ -218,6 +247,9 @@ const AuthController = {
           dept: userDept || user.dept,
           employee_id: user.employee_id,
           designation: userDesignation || user.designation || "",
+          rank_level: rankLevel,
+          grade_code: gradeCode,
+          is_hod: isHod,
         },
         process.env.JWT_SECRET,
         { expiresIn: "14h" }
@@ -261,7 +293,14 @@ const AuthController = {
           profile_photo: user.profile_photo,
           tabs_enabled: user.tabs_enabled || false,
           enabled_tabs: user.enabled_tabs || "1,2,3,4",
-          notice_acknowledged: Boolean(user.notice_acknowledged)
+          notice_acknowledged: Boolean(user.notice_acknowledged),
+          rank_level: rankLevel,
+          grade_code: gradeCode,
+          is_hod: isHod,
+          grade: {
+            grade_code: gradeCode,
+            rank_level: rankLevel,
+          }
         }
       });
     } catch (err) {

@@ -286,7 +286,7 @@ const AttendanceController = {
             where: {
               date: { [Op.between]: [startDateStr, endDateStr] }
             },
-            attributes: ["id", "name", "date"],
+            attributes: ["id", "name", "date", "dept"],
             raw: true,
           }),
         ]);
@@ -415,7 +415,14 @@ const AttendanceController = {
                   status = isFuture ? "Scheduled" : "Absent";
                   notes = matchedSchedule.notes || (isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)");
                 }
-              } else if (holidayMap[dStr]) {
+              } else if (
+                holidayMap[dStr] &&
+                (!holidayMap[dStr].dept ||
+                  holidayMap[dStr].dept.toLowerCase() === "all" ||
+                  !emp.dept ||
+                  emp.dept.toLowerCase() === "general" ||
+                  holidayMap[dStr].dept.toLowerCase() === emp.dept.toLowerCase())
+              ) {
                 const matchedHoliday = holidayMap[dStr];
                 status = "Holiday";
                 shiftName = "Holiday";
