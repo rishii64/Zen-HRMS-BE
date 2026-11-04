@@ -148,65 +148,81 @@ const resolveShiftAndStatus = async (employeeId, dateStr, punchTimeStr) => {
       order: [["id", "DESC"]],
     });
 
-    if (!schedule) {
-      schedule = await Schedule.findOne({
-        where: sequelize.where(
-          sequelize.fn("LOWER", sequelize.col("employee_id")),
-          employeeId.toLowerCase().trim()
-        ),
-        order: [["date", "DESC"], ["id", "DESC"]],
-      });
-    }
+    // NOTE: Historical schedules from past dates must NEVER dictate today's shift timing.
+    // If no schedule is assigned specifically for today, default to company General Shift.
 
     let shiftStartHour = 10;
     let shiftStartMinute = 0;
+    let shiftEndHour = 19;
+    let shiftEndMinute = 0;
     let shiftName = "General Shift";
 
     if (schedule) {
-      if (schedule.shift_name) shiftName = schedule.shift_name;
-      if (schedule.start_time) {
-        const parts = schedule.start_time.split(":");
-        const pHour = parseInt(parts[0], 10);
-        const pMin = parseInt(parts[1] || "0", 10);
-        if (!isNaN(pHour)) {
-          shiftStartHour = pHour;
-          shiftStartMinute = isNaN(pMin) ? 0 : pMin;
+      const sName = (schedule.shift_name || "").toLowerCase().trim();
+      const isOff = sName.includes("holiday") || sName.includes("week off") || sName.includes("leave");
+      if (!isOff) {
+        if (schedule.shift_name) shiftName = schedule.shift_name;
+        if (schedule.start_time) {
+          const parts = schedule.start_time.split(":");
+          const pHour = parseInt(parts[0], 10);
+          const pMin = parseInt(parts[1] || "0", 10);
+          if (!isNaN(pHour)) {
+            shiftStartHour = pHour;
+            shiftStartMinute = isNaN(pMin) ? 0 : pMin;
+          }
+        }
+        if (schedule.end_time) {
+          const parts = schedule.end_time.split(":");
+          const pHour = parseInt(parts[0], 10);
+          const pMin = parseInt(parts[1] || "0", 10);
+          if (!isNaN(pHour)) {
+            shiftEndHour = pHour;
+            shiftEndMinute = isNaN(pMin) ? 0 : pMin;
+          }
         }
       }
     }
 
     const GRACE_MINUTES = 15;
-    const timeParts = punchTimeStr.split(":");
+    const timeParts = (punchTimeStr || "10:00:00").split(":");
     const currentHour = parseInt(timeParts[0], 10) || 0;
     const currentMinute = parseInt(timeParts[1] || "0", 10) || 0;
+    const currentSecond = parseInt(timeParts[2] || "0", 10) || 0;
 
-    const checkInMinutes = currentHour * 60 + currentMinute;
-    const shiftStartMinutes = shiftStartHour * 60 + shiftStartMinute;
+    const checkInTotalSeconds = currentHour * 3600 + currentMinute * 60 + currentSecond;
+    const shiftStartTotalSeconds = shiftStartHour * 3600 + shiftStartMinute * 60;
+    const graceCutoffSeconds = shiftStartTotalSeconds + (GRACE_MINUTES * 60);
 
     let isLate = false;
     if (shiftStartHour >= 18 && currentHour < 6) {
-      const adjustedCheckInMinutes = (currentHour + 24) * 60 + currentMinute;
-      isLate = adjustedCheckInMinutes > (shiftStartMinutes + GRACE_MINUTES);
+      const adjustedCheckInSeconds = (currentHour + 24) * 3600 + currentMinute * 60 + currentSecond;
+      isLate = adjustedCheckInSeconds > graceCutoffSeconds;
     } else {
-      isLate = checkInMinutes > (shiftStartMinutes + GRACE_MINUTES);
+      // Upto shift_start + 15 min (e.g. 10:15:00 AM) is ON TIME; beyond is LATE
+      isLate = checkInTotalSeconds > graceCutoffSeconds;
     }
 
     return {
       status: isLate ? "Late Present" : "Present",
       late_count: isLate ? 1 : 0,
       shift_name: shiftName,
+      shift_start: `${String(shiftStartHour).padStart(2, "0")}:${String(shiftStartMinute).padStart(2, "0")}`,
+      shift_end: `${String(shiftEndHour).padStart(2, "0")}:${String(shiftEndMinute).padStart(2, "0")}`,
     };
   } catch (err) {
     console.error("Biometric shift resolution fallback:", err.message);
-    const timeParts = punchTimeStr.split(":");
+    const timeParts = (punchTimeStr || "10:00:00").split(":");
     const currentHour = parseInt(timeParts[0], 10) || 0;
     const currentMinute = parseInt(timeParts[1] || "0", 10) || 0;
-    const checkInMinutes = currentHour * 60 + currentMinute;
-    const isLate = checkInMinutes > (10 * 60 + 15);
+    const currentSecond = parseInt(timeParts[2] || "0", 10) || 0;
+    const checkInTotalSeconds = currentHour * 3600 + currentMinute * 60 + currentSecond;
+    const isLate = checkInTotalSeconds > (10 * 3600 + 15 * 60);
     return {
       status: isLate ? "Late Present" : "Present",
       late_count: isLate ? 1 : 0,
       shift_name: "General Shift",
+      shift_start: "10:00",
+      shift_end: "19:00",
     };
   }
 };

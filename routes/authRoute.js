@@ -21,6 +21,10 @@ const FnfController = require("../controller/fnfController");
 const OfferController = require("../controller/offerController");
 const ClaimController = require("../controller/claimController");
 const OrganizationController = require("../controller/organizationController");
+const NotificationController = require("../controller/notificationController");
+const TransferController = require("../controller/transferController");
+const PromotionController = require("../controller/promotionController");
+const OvertimeController = require("../controller/overtimeController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -126,7 +130,16 @@ router.delete("/schedule/:id", authenticate, ScheduleController.deleteSchedule);
 router.get("/holidays", HolidayController.getHolidays);
 router.post("/holidays", authenticate, HolidayController.addHoliday);
 router.post("/holidays/add", authenticate, HolidayController.addHoliday);
+router.put("/holidays/:id/toggle-working-day", authenticate, HolidayController.toggleWorkingDay);
 router.delete("/holidays/:id", authenticate, HolidayController.deleteHoliday);
+
+// In-App Notification Center routes
+router.get("/notifications", authenticate, NotificationController.getNotifications);
+router.put("/notifications/read-all", authenticate, NotificationController.markAllAsRead);
+router.put("/notifications/:id/read", authenticate, NotificationController.markAsRead);
+router.delete("/notifications/clear-all", authenticate, NotificationController.clearAll);
+router.delete("/notifications/:id", authenticate, NotificationController.deleteNotification);
+router.post("/notifications/broadcast", authenticate, authorizeRoles("hr", "admin", "hrmanager", "ceo", "coo"), NotificationController.broadcastNotification);
 
 // Leave Management routes
 router.get("/leave", authenticate, LeaveController.getLeaves);
@@ -454,6 +467,12 @@ router.get("/training/reports", authenticate, TrainingController.getTrainingRepo
 // ==========================================
 router.get("/organization/structure", OrganizationController.getOrganizationStructure);
 
+// Interactive Org Chart, Department Hierarchy & Visual Analytics
+router.get("/organization/tree", OrganizationController.getOrgTree);
+router.get("/organization/department-hierarchy", OrganizationController.getDepartmentHierarchy);
+router.put("/organization/reporting-manager", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.reassignReportingManager);
+router.get("/organization/analytics", OrganizationController.getVisualAnalytics);
+
 // Departments
 router.get("/departments", OrganizationController.getDepartments);
 router.post("/departments", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.createDepartment);
@@ -470,5 +489,38 @@ router.get("/designations", OrganizationController.getDesignations);
 router.post("/designations", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.createDesignation);
 router.put("/designations/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.updateDesignation);
 router.delete("/designations/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.deleteDesignation);
+
+// ==========================================
+// Transfers & Deputation Workflow Routes
+// ==========================================
+router.get("/transfers/metadata", authenticate, TransferController.getTransferMetadata);
+router.get("/transfers", authenticate, TransferController.getAllTransfers);
+router.get("/transfers/:id", authenticate, TransferController.getTransferById);
+router.post("/transfers", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "management", "ceo", "coo", "hrmanager"), TransferController.createTransfer);
+router.put("/transfers/:id/status", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TransferController.updateTransferStatus);
+router.put("/transfers/:id/handover", authenticate, TransferController.updateHandover);
+router.put("/transfers/:id/letter", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TransferController.updateLetterDetails);
+router.delete("/transfers/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), TransferController.deleteTransfer);
+
+// ==========================================
+// Promotions & Grade Progression Engine Routes
+// ==========================================
+router.get("/promotions/metadata", authenticate, PromotionController.getPromotionMetadata);
+router.get("/promotions", authenticate, PromotionController.getAllPromotions);
+router.get("/promotions/:id", authenticate, PromotionController.getPromotionById);
+router.post("/promotions", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "management", "ceo", "coo", "hrmanager"), PromotionController.createPromotion);
+router.put("/promotions/:id/status", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PromotionController.updatePromotionStatus);
+router.put("/promotions/:id/letter", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PromotionController.updateLetterDetails);
+router.delete("/promotions/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PromotionController.deletePromotion);
+
+// ==========================================
+// Overtime (OT) Tracking & Approval Engine Routes
+// ==========================================
+router.get("/overtime/eligible-shifts", authenticate, OvertimeController.getEligibleOvertimeShifts);
+router.get("/overtime", authenticate, OvertimeController.getAllOvertimeTickets);
+router.post("/overtime", authenticate, OvertimeController.createOvertimeTicket);
+router.put("/overtime/:id/review", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "management", "ceo", "coo", "hrmanager"), OvertimeController.reviewOvertimeTicket);
+router.post("/overtime/sync-payroll", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo", "coo", "hrmanager"), OvertimeController.syncOvertimeWithPayroll);
+router.delete("/overtime/:id", authenticate, OvertimeController.deleteOvertimeTicket);
 
 module.exports = router;

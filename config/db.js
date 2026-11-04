@@ -64,8 +64,25 @@ const ExpenseClaimItem = require("../model/expenseClaimItemModel")(sequelize);
 const Department = require("../model/departmentModel")(sequelize);
 const JobGrade = require("../model/jobGradeModel")(sequelize);
 const Designation = require("../model/designationModel")(sequelize);
+const Notification = require("../model/notificationModel")(sequelize);
+const Transfer = require("../model/transferModel")(sequelize);
+const Promotion = require("../model/promotionModel")(sequelize);
+const OvertimeTicket = require("../model/overtimeModel")(sequelize);
 
 // Model Associations
+
+// Transfer associations
+Employee.hasMany(Transfer, { foreignKey: "employee_id", sourceKey: "employee_id", as: "transfers" });
+Transfer.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
+// Promotion associations
+Employee.hasMany(Promotion, { foreignKey: "employee_id", sourceKey: "employee_id", as: "promotions" });
+Promotion.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
+// Overtime associations
+Employee.hasMany(OvertimeTicket, { foreignKey: "employee_id", sourceKey: "employee_id", as: "overtimeTickets" });
+OvertimeTicket.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
 
 // 1. User <-> Employee
 User.hasOne(Employee, {
@@ -1722,4 +1739,6 @@ module.exports = {
   Department,
   JobGrade,
   Designation,
-};
+  Notification,
+  Transfer,
+  Promotion,  OvertimeTicket,};

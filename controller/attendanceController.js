@@ -7,9 +7,9 @@ const getTodayDateStr = () => {
 };
 
 // Helper to resolve an employee's assigned schedule and determine check-in status
-const resolveShiftAndStatus = async (employee_id, today, utcToday, now) => {
+const resolveShiftAndStatus = async (employee_id, today, utcToday, now, checkInTimeStr = null) => {
   try {
-    // 1. Check for a schedule specifically assigned for today
+    // 1. Check for a schedule specifically assigned for today (or utcToday)
     let schedule = await Schedule.findOne({
       where: {
         [Op.and]: [
@@ -23,16 +23,8 @@ const resolveShiftAndStatus = async (employee_id, today, utcToday, now) => {
       order: [["id", "DESC"]]
     });
 
-    // 2. If no specific schedule for today, check the most recent schedule assignment
-    if (!schedule) {
-      schedule = await Schedule.findOne({
-        where: sequelize.where(
-          sequelize.fn("LOWER", sequelize.col("employee_id")),
-          employee_id.toLowerCase().trim()
-        ),
-        order: [["date", "DESC"], ["id", "DESC"]]
-      });
-    }
+    // NOTE: Historical schedules from past dates must NEVER dictate today's shift timing.
+    // If no schedule is assigned specifically for today, default to company General Shift.
 
     // Default company shift: General Shift (10:00 AM - 19:00 PM)
     let shiftStartHour = 10;
@@ -42,44 +34,59 @@ const resolveShiftAndStatus = async (employee_id, today, utcToday, now) => {
     let shiftName = "General Shift";
 
     if (schedule) {
-      if (schedule.shift_name) shiftName = schedule.shift_name;
-      if (schedule.start_time) {
-        const parts = schedule.start_time.split(":");
-        const pHour = parseInt(parts[0], 10);
-        const pMin = parseInt(parts[1] || "0", 10);
-        if (!isNaN(pHour)) {
-          shiftStartHour = pHour;
-          shiftStartMinute = isNaN(pMin) ? 0 : pMin;
+      const sName = (schedule.shift_name || "").toLowerCase().trim();
+      const isOff = sName.includes("holiday") || sName.includes("week off") || sName.includes("leave");
+      if (!isOff) {
+        if (schedule.shift_name) shiftName = schedule.shift_name;
+        if (schedule.start_time) {
+          const parts = schedule.start_time.split(":");
+          const pHour = parseInt(parts[0], 10);
+          const pMin = parseInt(parts[1] || "0", 10);
+          if (!isNaN(pHour)) {
+            shiftStartHour = pHour;
+            shiftStartMinute = isNaN(pMin) ? 0 : pMin;
+          }
         }
-      }
-      if (schedule.end_time) {
-        const parts = schedule.end_time.split(":");
-        const pHour = parseInt(parts[0], 10);
-        const pMin = parseInt(parts[1] || "0", 10);
-        if (!isNaN(pHour)) {
-          shiftEndHour = pHour;
-          shiftEndMinute = isNaN(pMin) ? 0 : pMin;
+        if (schedule.end_time) {
+          const parts = schedule.end_time.split(":");
+          const pHour = parseInt(parts[0], 10);
+          const pMin = parseInt(parts[1] || "0", 10);
+          if (!isNaN(pHour)) {
+            shiftEndHour = pHour;
+            shiftEndMinute = isNaN(pMin) ? 0 : pMin;
+          }
         }
       }
     }
 
     const GRACE_MINUTES = 15;
-    const ist = getISTParts(now);
-    const currentHour = ist.hour;
-    const currentMinute = ist.minute;
-    const checkInMinutes = currentHour * 60 + currentMinute;
-    const shiftStartMinutes = shiftStartHour * 60 + shiftStartMinute;
+    let currentHour, currentMinute, currentSecond;
+
+    if (checkInTimeStr && typeof checkInTimeStr === "string" && checkInTimeStr.includes(":")) {
+      const parts = checkInTimeStr.split(":");
+      currentHour = parseInt(parts[0], 10) || 0;
+      currentMinute = parseInt(parts[1] || "0", 10) || 0;
+      currentSecond = parseInt(parts[2] || "0", 10) || 0;
+    } else {
+      const ist = getISTParts(now);
+      currentHour = ist.hour;
+      currentMinute = ist.minute;
+      currentSecond = ist.second;
+    }
+
+    const checkInTotalSeconds = currentHour * 3600 + currentMinute * 60 + currentSecond;
+    const shiftStartTotalSeconds = shiftStartHour * 3600 + shiftStartMinute * 60;
+    const graceCutoffSeconds = shiftStartTotalSeconds + (GRACE_MINUTES * 60);
 
     let isLate = false;
     // Handle night shifts crossing midnight (shift start >= 18:00 and check-in early morning next day)
     if (shiftStartHour >= 18 && currentHour < 6) {
-      const adjustedCheckInMinutes = (currentHour + 24) * 60 + currentMinute;
-      isLate = adjustedCheckInMinutes > (shiftStartMinutes + GRACE_MINUTES);
+      const adjustedCheckInSeconds = (currentHour + 24) * 3600 + currentMinute * 60 + currentSecond;
+      isLate = adjustedCheckInSeconds > graceCutoffSeconds;
     } else {
-      // If employee logs in before or at shift start time: always ON TIME (Present, late_count = 0)
-      // If employee logs in within grace period: ON TIME (Present, late_count = 0)
-      // If employee logs in after shift start time + grace period: Late Present (late_count = 1)
-      isLate = checkInMinutes > (shiftStartMinutes + GRACE_MINUTES);
+      // Upto shift_start + 15 min (e.g. 10:15:00 AM) is ON TIME (Present, late_count = 0)
+      // Beyond 10:15:00 AM is LATE (Late Present, late_count = 1)
+      isLate = checkInTotalSeconds > graceCutoffSeconds;
     }
 
     const status = isLate ? "Late Present" : "Present";
@@ -96,11 +103,20 @@ const resolveShiftAndStatus = async (employee_id, today, utcToday, now) => {
   } catch (err) {
     console.error("Error resolving shift timing:", err.message);
     // Safe fallback to General Shift (10:00 AM) using IST
-    const ist = getISTParts(now);
-    const currentHour = ist.hour;
-    const currentMinute = ist.minute;
-    const checkInMinutes = currentHour * 60 + currentMinute;
-    const isLate = checkInMinutes > (10 * 60 + 15);
+    let currentHour, currentMinute, currentSecond;
+    if (checkInTimeStr && typeof checkInTimeStr === "string" && checkInTimeStr.includes(":")) {
+      const parts = checkInTimeStr.split(":");
+      currentHour = parseInt(parts[0], 10) || 0;
+      currentMinute = parseInt(parts[1] || "0", 10) || 0;
+      currentSecond = parseInt(parts[2] || "0", 10) || 0;
+    } else {
+      const ist = getISTParts(now);
+      currentHour = ist.hour;
+      currentMinute = ist.minute;
+      currentSecond = ist.second;
+    }
+    const checkInTotalSeconds = currentHour * 3600 + currentMinute * 60 + currentSecond;
+    const isLate = checkInTotalSeconds > (10 * 3600 + 15 * 60);
     return {
       status: isLate ? "Late Present" : "Present",
       late_count: isLate ? 1 : 0,
@@ -286,7 +302,7 @@ const AttendanceController = {
             where: {
               date: { [Op.between]: [startDateStr, endDateStr] }
             },
-            attributes: ["id", "name", "date", "dept"],
+            attributes: ["id", "name", "date", "dept", "type", "is_working_day"],
             raw: true,
           }),
         ]);
@@ -349,6 +365,37 @@ const AttendanceController = {
             plain.dept = matchedProfile.dept;
           }
           plain.notes = plain.notes !== undefined ? plain.notes : (r.notes || null);
+
+          // Strictly enforce: check-in beyond 10:15:00 AM (or shift_start + 15m) is Late
+          if (plain.check_in && plain.check_in !== "—" && plain.check_in.includes(":")) {
+            const cParts = plain.check_in.split(":");
+            const cSec = (parseInt(cParts[0], 10) || 0) * 3600 + (parseInt(cParts[1], 10) || 0) * 60 + (parseInt(cParts[2], 10) || 0);
+            const sParts = (plain.shift_start || "10:00").split(":");
+            const sHour = parseInt(sParts[0], 10) || 10;
+            const sMin = parseInt(sParts[1], 10) || 0;
+            const cutoffSec = sHour * 3600 + sMin * 60 + (15 * 60);
+
+            let isCheckInLate = false;
+            if (sHour >= 18 && (parseInt(cParts[0], 10) || 0) < 6) {
+              const adjSec = ((parseInt(cParts[0], 10) || 0) + 24) * 3600 + (parseInt(cParts[1], 10) || 0) * 60 + (parseInt(cParts[2], 10) || 0);
+              isCheckInLate = adjSec > cutoffSec;
+            } else {
+              isCheckInLate = cSec > cutoffSec;
+            }
+
+            if (isCheckInLate) {
+              if (plain.status === "Present" || plain.status === "On Time") {
+                plain.status = "Late Present";
+                plain.late_count = 1;
+              }
+            } else {
+              if (plain.status === "Late Present" || plain.status === "Late") {
+                plain.status = "Present";
+                plain.late_count = 0;
+              }
+            }
+          }
+
           return plain;
         });
 
@@ -417,6 +464,8 @@ const AttendanceController = {
                 }
               } else if (
                 holidayMap[dStr] &&
+                !holidayMap[dStr].is_working_day &&
+                holidayMap[dStr].type !== "Working Day" &&
                 (!holidayMap[dStr].dept ||
                   holidayMap[dStr].dept.toLowerCase() === "all" ||
                   !emp.dept ||
@@ -510,7 +559,7 @@ const AttendanceController = {
         },
       });
 
-      // Find schedule if any
+      // Find schedule if any specifically assigned for today
       let schedule = null;
       try {
         schedule = await Schedule.findOne({
@@ -525,15 +574,6 @@ const AttendanceController = {
           },
           order: [["id", "DESC"]]
         });
-        if (!schedule) {
-          schedule = await Schedule.findOne({
-            where: sequelize.where(
-              sequelize.fn("LOWER", sequelize.col("employee_id")),
-              employee_id.toLowerCase().trim()
-            ),
-            order: [["date", "DESC"], ["id", "DESC"]]
-          });
-        }
       } catch (sErr) {
         console.warn("Could not fetch schedule for today status:", sErr.message);
       }
@@ -774,13 +814,39 @@ const AttendanceController = {
         });
       }
 
+      // Calculate late_count and status based on check_in time and 10:15:00 AM cutoff
+      let finalStatus = status;
+      let calculatedLateCount = 0;
+      if (check_in && check_in !== "—" && check_in.includes(":")) {
+        const parts = check_in.split(":");
+        const chHour = parseInt(parts[0], 10) || 0;
+        const chMin = parseInt(parts[1] || "0", 10) || 0;
+        const chSec = parseInt(parts[2] || "0", 10) || 0;
+        const totalSec = chHour * 3600 + chMin * 60 + chSec;
+        // Default 10:15:00 AM cutoff (36900 seconds)
+        if (totalSec > (10 * 3600 + 15 * 60)) {
+          calculatedLateCount = 1;
+          if (finalStatus === "Present" || finalStatus === "On Time") {
+            finalStatus = "Late Present";
+          }
+        } else {
+          if (finalStatus === "Late Present" || finalStatus === "Late") {
+            finalStatus = "Present";
+          }
+        }
+      }
+      if (finalStatus === "Late Present" || finalStatus === "Late") {
+        calculatedLateCount = 1;
+      }
+
       if (record) {
         await record.update({
           name: resolvedName,
           dept: resolvedDept,
           check_in: check_in || record.check_in,
           check_out: check_out || record.check_out,
-          status,
+          status: finalStatus,
+          late_count: calculatedLateCount,
           notes: notes !== undefined ? notes : record.notes,
           work_hours: work_hours || record.work_hours,
         });
@@ -792,7 +858,8 @@ const AttendanceController = {
           date,
           check_in: check_in || null,
           check_out: check_out || null,
-          status,
+          status: finalStatus,
+          late_count: calculatedLateCount,
           notes: notes || null,
           work_hours: work_hours || 0,
         });

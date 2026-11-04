@@ -32,7 +32,12 @@ module.exports = (sequelize) => {
       type: {
         type: DataTypes.STRING(50),
         allowNull: false,
-        defaultValue: "Public", // Public, National, Festival, Company, Gazetted, Optional
+        defaultValue: "Public", // Public, National, Festival, Company, Gazetted, Optional, Working Day
+      },
+      is_working_day: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
       },
       dept: {
         type: DataTypes.STRING(100),

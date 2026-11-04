@@ -1,4 +1,5 @@
-const { Holiday } = require("../config/db");
+const { Holiday, Attendance, sequelize } = require("../config/db");
+const { Op } = require("sequelize");
 
 const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -15,6 +16,25 @@ const HolidayController = {
         order: [["date", "ASC"]],
       });
 
+      // Find dates where employee check-in / punches actually exist
+      let workedDatesSet = new Set();
+      try {
+        const punchDates = await Attendance.findAll({
+          attributes: [
+            [sequelize.fn("DISTINCT", sequelize.col("date")), "date"]
+          ],
+          where: {
+            status: { [Op.in]: ["Present", "Late Present", "Half Day", "On Time", "PRESENT", "LATE"] }
+          },
+          raw: true
+        });
+        punchDates.forEach(p => {
+          if (p.date) workedDatesSet.add(String(p.date));
+        });
+      } catch (attErr) {
+        console.warn("Could not query attendance punch dates for holidays:", attErr.message);
+      }
+
       // Filter by year in JS or query if requested
       const formatted = holidays.map((h) => {
         const plain = h.toJSON ? h.toJSON() : { ...h };
@@ -24,6 +44,12 @@ const HolidayController = {
         const dNum = dObj.getDate() || plain.day_num || 1;
         const fullDateTitle = dObj.toLocaleDateString("en-US", { month: "long", day: "numeric" });
 
+        const isAssignedWorkingDay = Boolean(
+          plain.is_working_day ||
+          plain.type === "Working Day" ||
+          workedDatesSet.has(String(plain.date))
+        );
+
         return {
           id: plain.id,
           name: plain.name,
@@ -32,8 +58,9 @@ const HolidayController = {
           dateStr: plain.date,
           month: mShort,
           dayNum: dNum,
-          type: plain.type || "Public",
+          type: isAssignedWorkingDay ? "Working Day" : (plain.type || "Public"),
           dept: plain.dept || "All",
+          is_working_day: isAssignedWorkingDay,
           notes: plain.notes || "",
           created_by: plain.created_by || null,
         };
@@ -51,7 +78,7 @@ const HolidayController = {
   // POST /api/auth/holidays
   async addHoliday(req, res) {
     try {
-      const { name, date, type = "Public", dept = "All", notes = "" } = req.body;
+      const { name, date, type = "Public", dept = "All", notes = "", is_working_day = false } = req.body;
       const creatorName = req.user?.name || req.user?.employee_id || "Management";
 
       if (!name || !date) {
@@ -63,6 +90,8 @@ const HolidayController = {
       const mShort = MONTH_NAMES[dObj.getMonth()] || "JAN";
       const dNum = dObj.getDate() || 1;
 
+      const workingDayBool = Boolean(is_working_day || type === "Working Day");
+
       // Upsert by date
       let existing = await Holiday.findOne({ where: { date } });
       if (existing) {
@@ -71,8 +100,9 @@ const HolidayController = {
           day: dayName,
           month: mShort,
           day_num: dNum,
-          type: type || "Public",
+          type: workingDayBool ? "Working Day" : (type || "Public"),
           dept: dept || "All",
+          is_working_day: workingDayBool,
           created_by: creatorName,
           notes: notes || existing.notes,
         });
@@ -85,8 +115,9 @@ const HolidayController = {
         day: dayName,
         month: mShort,
         day_num: dNum,
-        type: type || "Public",
+        type: workingDayBool ? "Working Day" : (type || "Public"),
         dept: dept || "All",
+        is_working_day: workingDayBool,
         created_by: creatorName,
         notes,
       });
@@ -95,6 +126,40 @@ const HolidayController = {
     } catch (err) {
       console.error("Add holiday error:", err.message);
       return res.status(500).json({ error: "Failed to save holiday" });
+    }
+  },
+
+  // PUT /api/auth/holidays/:id/toggle-working-day
+  async toggleWorkingDay(req, res) {
+    try {
+      const { id } = req.params;
+      const holiday = await Holiday.findByPk(id);
+      if (!holiday) {
+        return res.status(404).json({ error: "Holiday not found" });
+      }
+
+      const currentStatus = Boolean(holiday.is_working_day || holiday.type === "Working Day");
+      const nextStatus = !currentStatus;
+
+      await holiday.update({
+        is_working_day: nextStatus,
+        type: nextStatus ? "Working Day" : "Company"
+      });
+
+      return res.json({
+        success: true,
+        message: nextStatus ? "Marked as Assigned Working Day" : "Reverted to Holiday Off-Day",
+        data: {
+          id: holiday.id,
+          name: holiday.name,
+          date: holiday.date,
+          is_working_day: nextStatus,
+          type: holiday.type
+        }
+      });
+    } catch (err) {
+      console.error("Toggle working day error:", err.message);
+      return res.status(500).json({ error: "Failed to toggle working day status" });
     }
   },
 

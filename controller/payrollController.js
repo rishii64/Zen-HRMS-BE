@@ -1,4 +1,4 @@
-const { User, Employee, Payroll, Attendance, Leave, Holiday, ITDeclaration } = require("../config/db");
+const { User, Employee, Payroll, Attendance, Leave, Holiday, ITDeclaration, OvertimeTicket } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const { getISTParts } = require("../utils/timezone");
