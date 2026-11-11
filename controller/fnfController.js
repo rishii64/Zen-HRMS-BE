@@ -243,9 +243,31 @@ module.exports = {
         ? new Date(resignation.created_at).toISOString().split("T")[0]
         : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
+      // Parse employee salary structure (from user or employee record)
+      let parsedStructure = null;
+      const rawStructure = user?.salary_structure || emp?.salary_structure;
+      if (rawStructure) {
+        try {
+          parsedStructure = typeof rawStructure === "string" ? JSON.parse(rawStructure) : rawStructure;
+        } catch (_) {}
+      }
+
+      const structEarnings = parsedStructure?.earnings || {};
+      const structDeductions = parsedStructure?.deductions || {};
+      const structAdjustments = parsedStructure?.adjustments || {};
+
       // Salary baseline
-      const monthlyGross = parseFloat(user?.current_salary || emp?.current_salary || 50000);
-      const monthlyBasic = parseFloat((monthlyGross * 0.5).toFixed(2)); // Standard 50% basic
+      const monthlyGross = parseFloat(user?.current_salary || emp?.current_salary || parsedStructure?.gross_salary || 50000);
+
+      // Backend salary structure standard:
+      // If structured basic is defined, use it; otherwise standard 45% of Gross
+      let monthlyBasic = 0;
+      if (structEarnings.basic != null && !isNaN(parseFloat(structEarnings.basic)) && parseFloat(structEarnings.basic) > 0) {
+        monthlyBasic = parseFloat(parseFloat(structEarnings.basic).toFixed(2));
+      } else {
+        monthlyBasic = parseFloat((monthlyGross * 0.45).toFixed(2));
+      }
+
       const perDayRate = parseFloat((monthlyGross / 26).toFixed(2)); // Standard India 26 working days
       const basicPerDayRate = parseFloat((monthlyBasic / 26).toFixed(2));
 
@@ -310,29 +332,121 @@ module.exports = {
         }
       }
 
-      // Outstanding loans and advance salary from recent Payroll
+      // Outstanding loans and advance salary from salary_structure adjustments or recent Payroll
       let loanRecovery = 0;
       let advanceRecovery = 0;
-      try {
-        const lastPayroll = await Payroll.findOne({
-          where: { employee_id: empId },
-          order: [["id", "DESC"]],
-        });
-
-        if (lastPayroll && lastPayroll.adjustments) {
-          const adj = typeof lastPayroll.adjustments === "string" ? JSON.parse(lastPayroll.adjustments) : lastPayroll.adjustments;
-          loanRecovery = parseFloat(adj.loan_amount || adj.loan_emi || 0);
-          advanceRecovery = parseFloat(adj.advance_amount || 0);
-        }
-      } catch (payErr) {
-        console.warn("Could not fetch last payroll adjustments:", payErr.message);
+      if (structAdjustments.loan_amount && parseFloat(structAdjustments.loan_amount) > 0) {
+        loanRecovery = parseFloat(structAdjustments.loan_emi || structAdjustments.loan_amount || 0);
+      }
+      if (structAdjustments.advance_amount && parseFloat(structAdjustments.advance_amount) > 0) {
+        advanceRecovery = parseFloat(structAdjustments.advance_deduction || structAdjustments.advance_amount || 0);
       }
 
-      // Statutory Deductions
-      const statutoryPf = parseFloat(Math.min(1800, monthlyBasic * 0.12).toFixed(2));
-      const statutoryEsi = monthlyGross <= 21000 ? parseFloat((monthlyGross * 0.0075).toFixed(2)) : 0;
-      const statutoryPt = 200; // Standard state PT
-      const taxTds = 0; // TDS adjustment
+      if (loanRecovery === 0 || advanceRecovery === 0) {
+        try {
+          const lastPayroll = await Payroll.findOne({
+            where: { employee_id: empId },
+            order: [["id", "DESC"]],
+          });
+
+          if (lastPayroll && lastPayroll.adjustments) {
+            const adj = typeof lastPayroll.adjustments === "string" ? JSON.parse(lastPayroll.adjustments) : lastPayroll.adjustments;
+            if (loanRecovery === 0) loanRecovery = parseFloat(adj.loan_amount || adj.loan_emi || 0);
+            if (advanceRecovery === 0) advanceRecovery = parseFloat(adj.advance_amount || 0);
+          }
+        } catch (payErr) {
+          console.warn("Could not fetch last payroll adjustments:", payErr.message);
+        }
+      }
+
+      // Facilities resolution (permanent employees default to true)
+      const isPermanent = String(user?.employment_type || emp?.employment_type || "Permanent").toLowerCase().includes("permanent");
+      const defaultFacilities = {
+        advance: isPermanent,
+        loan: isPermanent,
+        insurance: isPermanent,
+        gratuity: isPermanent,
+      };
+      let facilities = defaultFacilities;
+      if (user?.facilities) {
+        try { facilities = typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities; } catch {}
+      } else if (parsedStructure?.facilities) {
+        facilities = parsedStructure.facilities;
+      }
+
+      // ESI Threshold from user / structure / system settings (default 21,000)
+      let globalEsiThreshold = 21000;
+      try {
+        const [rows] = await sequelize.query("SELECT value FROM system_settings WHERE key = 'global_esi_threshold' LIMIT 1");
+        if (rows && rows.length > 0 && rows[0].value) {
+          globalEsiThreshold = parseFloat(rows[0].value) || 21000;
+        }
+      } catch (_) {}
+
+      const empEsiThreshold = (user?.esi_threshold != null && !isNaN(parseFloat(user.esi_threshold)))
+        ? parseFloat(user.esi_threshold)
+        : (parsedStructure?.esi_threshold != null ? parseFloat(parsedStructure.esi_threshold) : globalEsiThreshold);
+      const isEsiEligible = monthlyGross <= empEsiThreshold;
+
+      const hasCustomStructure = !!(parsedStructure && (parsedStructure.earnings || parsedStructure.deductions));
+
+      // Statutory & Policy Deductions strictly mapped from salary structure & payrollController rules:
+      // 1. PF: If custom salary structure exists, use defined PF (even if 0!).
+      // If no custom structure, fallback to standard 12% of Basic salary.
+      let statutoryPf = 0;
+      if (hasCustomStructure && structDeductions.pf !== undefined && structDeductions.pf !== null && !isNaN(parseFloat(structDeductions.pf))) {
+        statutoryPf = parseFloat(parseFloat(structDeductions.pf).toFixed(2));
+      } else if (!hasCustomStructure) {
+        statutoryPf = parseFloat(Math.round(monthlyBasic * 0.12).toFixed(2));
+      }
+
+      // 2. ESI / Mediclaim: Matching payrollController logic exactly
+      let statutoryEsi = 0;
+      let mediclaimDeduction = 0;
+      if (!facilities.insurance) {
+        statutoryEsi = 0;
+        mediclaimDeduction = 0;
+      } else if (hasCustomStructure) {
+        if (isEsiEligible) {
+          statutoryEsi = (structDeductions.esi !== undefined && structDeductions.esi !== null && !isNaN(parseFloat(structDeductions.esi)))
+            ? parseFloat(parseFloat(structDeductions.esi).toFixed(2))
+            : 0;
+          mediclaimDeduction = 0;
+        } else {
+          mediclaimDeduction = (structDeductions.mediclaim !== undefined && structDeductions.mediclaim !== null && !isNaN(parseFloat(structDeductions.mediclaim)))
+            ? parseFloat(parseFloat(structDeductions.mediclaim).toFixed(2))
+            : 0;
+          statutoryEsi = 0;
+        }
+      } else {
+        // Standard default when no custom structure exists
+        if (isEsiEligible) {
+          statutoryEsi = parseFloat(Math.round(monthlyGross * 0.0075).toFixed(2));
+          mediclaimDeduction = 0;
+        } else {
+          mediclaimDeduction = monthlyGross > 25000 ? 750 : 500;
+          statutoryEsi = 0;
+        }
+      }
+
+      // 3. PT: If custom salary structure exists, use defined PT (even if 0!).
+      // If no custom structure, fallback to standard slab (200 if > 15,000, else 0).
+      let statutoryPt = 0;
+      if (hasCustomStructure && structDeductions.professional_tax !== undefined && structDeductions.professional_tax !== null && !isNaN(parseFloat(structDeductions.professional_tax))) {
+        statutoryPt = parseFloat(parseFloat(structDeductions.professional_tax).toFixed(2));
+      } else if (!hasCustomStructure) {
+        statutoryPt = monthlyGross > 15000 ? 200 : 0;
+      }
+
+      // 4. TDS: If custom salary structure exists, use defined TDS or income_tax.
+      let taxTds = 0;
+      if (hasCustomStructure) {
+        if (structDeductions.tds !== undefined && structDeductions.tds !== null && !isNaN(parseFloat(structDeductions.tds))) {
+          taxTds = parseFloat(parseFloat(structDeductions.tds).toFixed(2));
+        } else if (structDeductions.income_tax !== undefined && structDeductions.income_tax !== null && !isNaN(parseFloat(structDeductions.income_tax))) {
+          taxTds = parseFloat(parseFloat(structDeductions.income_tax).toFixed(2));
+        }
+      }
 
       // Bank Details
       const bankName = emp?.bank_name || user?.bank_name || "State Bank of India";
@@ -341,7 +455,7 @@ module.exports = {
 
       // Sum totals
       const totalEarnings = parseFloat((unpaidSalaryAmount + leaveEncashmentAmount + gratuityAmount).toFixed(2));
-      const totalDeductions = parseFloat((noticeRecoveryAmount + loanRecovery + advanceRecovery + statutoryPf + statutoryEsi + statutoryPt + taxTds).toFixed(2));
+      const totalDeductions = parseFloat((noticeRecoveryAmount + loanRecovery + advanceRecovery + statutoryPf + statutoryEsi + mediclaimDeduction + statutoryPt + taxTds).toFixed(2));
       const netPayable = parseFloat((totalEarnings - totalDeductions).toFixed(2));
       const settlementType = netPayable >= 0 ? "PAYABLE_TO_EMPLOYEE" : "RECOVERABLE_FROM_EMPLOYEE";
 
@@ -384,6 +498,7 @@ module.exports = {
           asset_damage_recovery: 0,
           statutory_pf: statutoryPf,
           statutory_esi: statutoryEsi,
+          mediclaim_deduction: mediclaimDeduction,
           statutory_pt: statutoryPt,
           tax_tds_deduction: taxTds,
           other_deductions: 0,
@@ -413,9 +528,9 @@ module.exports = {
       const data = req.body;
 
       const monthlyGross = parseFloat(data.monthly_gross || 0);
-      const monthlyBasic = parseFloat(data.monthly_basic || monthlyGross * 0.5);
-      const perDayRate = parseFloat(data.per_day_rate || monthlyGross / 26);
-      const basicPerDayRate = parseFloat(data.leave_encashment_rate || monthlyBasic / 26);
+      const monthlyBasic = parseFloat(data.monthly_basic != null && !isNaN(parseFloat(data.monthly_basic)) ? data.monthly_basic : monthlyGross * 0.45);
+      const perDayRate = parseFloat(data.per_day_rate || (monthlyGross > 0 ? monthlyGross / 26 : 0));
+      const basicPerDayRate = parseFloat(data.leave_encashment_rate || (monthlyBasic > 0 ? monthlyBasic / 26 : 0));
 
       // Notice recovery
       const noticeShortfall = parseInt(data.notice_shortfall_days || 0, 10);
@@ -450,11 +565,12 @@ module.exports = {
       const assetDamage = parseFloat(data.asset_damage_recovery || 0);
       const pf = parseFloat(data.statutory_pf || 0);
       const esi = parseFloat(data.statutory_esi || 0);
+      const mediclaim = parseFloat(data.mediclaim_deduction || 0);
       const pt = parseFloat(data.statutory_pt || 0);
       const tds = parseFloat(data.tax_tds_deduction || 0);
       const otherDed = parseFloat(data.other_deductions || 0);
 
-      const totalDeductions = parseFloat((noticeRecovery + loanRec + advanceRec + assetDamage + pf + esi + pt + tds + otherDed).toFixed(2));
+      const totalDeductions = parseFloat((noticeRecovery + loanRec + advanceRec + assetDamage + pf + esi + mediclaim + pt + tds + otherDed).toFixed(2));
       const netPayable = parseFloat((totalEarnings - totalDeductions).toFixed(2));
       const settlementType = netPayable >= 0 ? "PAYABLE_TO_EMPLOYEE" : "RECOVERABLE_FROM_EMPLOYEE";
 
@@ -484,6 +600,7 @@ module.exports = {
           asset_damage_recovery: assetDamage,
           statutory_pf: pf,
           statutory_esi: esi,
+          mediclaim_deduction: mediclaim,
           statutory_pt: pt,
           tax_tds_deduction: tds,
           other_deductions: otherDed,

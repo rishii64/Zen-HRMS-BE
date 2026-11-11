@@ -65,8 +65,8 @@ router.post("/employees/toggle-tabs", EmployeeController.toggleEmployeeTabs);
 router.post("/employees/update-tabs", EmployeeController.updateEmployeeTabs);
 router.get("/employee/:empId", EmployeeController.getEmployeeByCode);
 router.get("/employee/profile/:empId", EmployeeController.getEmployeeByCode);
-// router.get("/employees/profile/:empId", EmployeeController.getEmployeeByCode);
-// router.get("/employees/:empId", EmployeeController.getEmployeeByCode);
+router.get("/employees/profile/:empId", EmployeeController.getEmployeeByCode);
+router.get("/employees/:empId", EmployeeController.getEmployeeByCode);
 router.get("/employees/:empId/salary", EmployeeController.getSalaryStructure);
 router.post("/employees/:empId/salary", EmployeeController.updateSalaryStructure);
 router.get("/employee/:empId/salary", EmployeeController.getSalaryStructure);
@@ -91,10 +91,10 @@ router.post("/payroll/disburse-batch", PayrollController.disburseBatch);
 router.get("/payroll/history/:employeeId", PayrollController.getPayrollHistory);
 
 // Detailed Profile Update with Document Upload (supports multiple files)
-router.post("/employee/:empId/profile",
-  upload.any(),
-  EmployeeController.updateDetailedProfile
-);
+router.post("/employee/:empId/profile", upload.any(), EmployeeController.updateDetailedProfile);
+router.put("/employee/:empId/profile", upload.any(), EmployeeController.updateDetailedProfile);
+router.post("/employees/:empId/profile", upload.any(), EmployeeController.updateDetailedProfile);
+router.put("/employees/:empId/profile", upload.any(), EmployeeController.updateDetailedProfile);
 
 // Attendance routes
 router.get("/attendance", authenticate, AttendanceController.getAttendance);
@@ -180,6 +180,7 @@ router.post("/resignation/:id/raise-clearance", authenticate, ResignationControl
 router.post("/resignation/:id/add-clearance-dept", authenticate, ResignationController.addCustomClearanceDept);
 router.patch("/resignation/:id/clear-dept", authenticate, ResignationController.clearDepartmentStep);
 router.patch("/resignation/:id/clearance", authenticate, ResignationController.updateClearance);
+router.patch("/resignation/:id/reassign-step-approver", authenticate, ResignationController.reassignStepApprover);
 
 // Exit Interview Form (Details & 10 Questions)
 router.post("/resignation/:id/raise-exit-interview", authenticate, ResignationController.raiseExitInterview);
@@ -471,6 +472,7 @@ router.get("/organization/structure", OrganizationController.getOrganizationStru
 router.get("/organization/tree", OrganizationController.getOrgTree);
 router.get("/organization/department-hierarchy", OrganizationController.getDepartmentHierarchy);
 router.put("/organization/reporting-manager", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.reassignReportingManager);
+router.put("/organization/hod", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.reassignHod);
 router.get("/organization/analytics", OrganizationController.getVisualAnalytics);
 
 // Departments

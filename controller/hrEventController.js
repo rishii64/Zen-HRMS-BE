@@ -1,5 +1,6 @@
 const { HrEvent, Employee, User } = require("../config/db");
 const { sendHREventAnnouncementEmail } = require("../utils/mailer");
+const { sendRealtimeNotification } = require("../socket");
 const { Op } = require("sequelize");
 
 const getEvents = async (req, res) => {
@@ -151,6 +152,21 @@ const createEvent = async (req, res) => {
       created_by_role: req.user?.role || "hr",
       emails_sent_count: 0,
     });
+
+    if (newEvent.status === "Sent") {
+      sendRealtimeNotification({
+        recipient_id: "ALL",
+        recipient_role: "all",
+        title: `New HR Event: ${newEvent.event_name}`,
+        message: `${newEvent.event_category || "Corporate Event"} scheduled on ${newEvent.event_date} (${newEvent.start_time || "10:00 AM"}) at ${newEvent.branch_location || "Headquarters"}.`,
+        type: "event",
+        category: "Events",
+        link: "/hr-events",
+        priority: "normal",
+        source_module: "events",
+        created_by: req.user?.name || "HR Team",
+      }).catch((e) => console.warn("Socket event notification failed:", e.message));
+    }
 
     return res.status(201).json({
       success: true,
@@ -323,6 +339,19 @@ const broadcastEvent = async (req, res) => {
       sent_at: new Date(),
       emails_sent_count: recipients.length,
     });
+
+    sendRealtimeNotification({
+      recipient_id: "ALL",
+      recipient_role: "all",
+      title: `Official Event Announcement: ${event.event_name}`,
+      message: `${event.event_category || "Corporate Event"} on ${event.event_date} (${event.start_time || "10:00 AM"}) at ${event.branch_location || "Headquarters"}.`,
+      type: "event",
+      category: "Events",
+      link: "/hr-events",
+      priority: "high",
+      source_module: "events",
+      created_by: req.user?.name || "HR Team",
+    }).catch((e) => console.warn("Socket broadcast event notification failed:", e.message));
 
     return res.status(200).json({
       success: true,

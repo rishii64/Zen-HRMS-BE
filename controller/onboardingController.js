@@ -1,4 +1,5 @@
 const { Onboarding, Employee, User, RecruitmentCandidate } = require("../config/db");
+const { sendRealtimeNotification } = require("../socket");
 const { Op } = require("sequelize");
 
 /**
@@ -222,6 +223,30 @@ const OnboardingController = {
           console.warn("Could not update candidate interview stage:", e.message);
         }
       }
+
+      // Realtime notifications for employee and HR
+      sendRealtimeNotification({
+        recipient_id: newRecord.employee_id,
+        title: "Welcome to Onboarding! 🚀",
+        message: `Your employee onboarding profile has been created. Please complete your documentation and asset acknowledgements.`,
+        type: "onboarding",
+        category: "Onboarding",
+        link: "/onboarding",
+        priority: "high",
+        source_module: "onboarding",
+        created_by: req.user?.name || "HR Team",
+      }).catch((e) => console.warn("Socket onboarding notify error:", e.message));
+
+      sendRealtimeNotification({
+        recipient_role: "hr",
+        title: "New Employee Onboarding Initiated",
+        message: `Onboarding initiated for ${newRecord.employee_name} (${newRecord.employee_id}) in ${newRecord.department || "General"}.`,
+        type: "onboarding",
+        category: "Onboarding",
+        link: "/onboarding",
+        priority: "normal",
+        source_module: "onboarding",
+      }).catch((e) => console.warn("Socket onboarding HR notify error:", e.message));
 
       return res.status(201).json({
         success: true,
@@ -721,6 +746,29 @@ const OnboardingController = {
       }
 
       await record.save();
+
+      // Realtime notification to employee
+      sendRealtimeNotification({
+        recipient_id: record.employee_id,
+        title: hod_decision === "PERMANENT"
+          ? "Probation Confirmed: Permanent Status! 🎖️"
+          : hod_decision === "REJECTED"
+          ? "Probation Assessment Completed"
+          : "Probation Period Extended",
+        message: `HOD review: ${
+          hod_decision === "PERMANENT"
+            ? "Congratulations! You have been confirmed as Permanent."
+            : hod_decision === "REJECTED"
+            ? "Probation assessment was not confirmed."
+            : `Your probation has been extended by ${record.hod_extension_months} month(s).`
+        } ${hod_analysis_remarks ? 'Note: ' + hod_analysis_remarks : ''}`,
+        type: "approval",
+        category: "Approvals",
+        link: "/profile/" + record.employee_id,
+        priority: "high",
+        source_module: "onboarding",
+        created_by: req.user?.name || "HOD",
+      }).catch((e) => console.warn("Socket probation notify error:", e.message));
 
       return res.json({
         success: true,

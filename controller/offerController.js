@@ -5,6 +5,7 @@ const {
   User,
   sequelize
 } = require("../config/db");
+const { sendRealtimeNotification } = require("../socket");
 const { Op } = require("sequelize");
 const crypto = require("crypto");
 const { sendMail } = require("../utils/mailer");
@@ -276,6 +277,21 @@ module.exports = {
         interview_stage: submit_for_approval ? "OFFER_PREPARED" : "SELECTED",
       });
 
+      if (submit_for_approval) {
+        sendRealtimeNotification({
+          recipient_role: "hod",
+          recipient_dept: requisition.department,
+          title: "New Job Offer Pending HOD Approval 📝",
+          message: `Offer for ${candidate.candidate_name} (${requisition.position}) in ${requisition.department} is awaiting your approval.`,
+          type: "approval",
+          category: "Approvals",
+          link: "/requisition",
+          priority: "high",
+          source_module: "offers",
+          created_by: req.user?.name || "HR Recruiter",
+        }).catch((e) => console.warn("Socket offer pending notify error:", e.message));
+      }
+
       return res.status(201).json({
         success: true,
         message: submit_for_approval
@@ -380,6 +396,19 @@ module.exports = {
             current_approval_stage: "MANAGEMENT",
             approval_status: "PENDING_MANAGEMENT_APPROVAL",
           });
+
+          sendRealtimeNotification({
+            recipient_role: "leadership",
+            title: "Offer Pending Executive Approval ⚖️",
+            message: `Offer for ${offer.candidate_name} (${offer.designation}) was endorsed by HOD ${approverName} and awaits Executive Sign-off.`,
+            type: "approval",
+            category: "Approvals",
+            link: "/requisition",
+            priority: "high",
+            source_module: "offers",
+            created_by: approverName,
+          }).catch((e) => console.warn("Socket offer HOD approve notify error:", e.message));
+
           return res.json({
             success: true,
             message: "HOD approved. Offer routed to Management / Executive for final sign-off.",
@@ -396,6 +425,19 @@ module.exports = {
             approval_status: "REJECTED",
             offer_status: "DRAFT",
           });
+
+          sendRealtimeNotification({
+            recipient_role: "hr",
+            title: "Offer Rejected by HOD ❌",
+            message: `Offer for ${offer.candidate_name} was rejected by HOD ${approverName}. Returned to draft.`,
+            type: "approval",
+            category: "Approvals",
+            link: "/requisition",
+            priority: "high",
+            source_module: "offers",
+            created_by: approverName,
+          }).catch((e) => console.warn("Socket offer HOD reject notify error:", e.message));
+
           return res.json({
             success: true,
             message: "Offer rejected by HOD and returned to HR for revisions.",
@@ -414,6 +456,19 @@ module.exports = {
             approval_status: "APPROVED",
             offer_status: "APPROVED", // Ready to send to candidate!
           });
+
+          sendRealtimeNotification({
+            recipient_role: "hr",
+            title: "Offer Fully Approved by Management! 📜",
+            message: `Offer for ${offer.candidate_name} (${offer.designation}) has been approved by ${approverName}. Ready to release to candidate.`,
+            type: "approval",
+            category: "Approvals",
+            link: "/requisition",
+            priority: "high",
+            source_module: "offers",
+            created_by: approverName,
+          }).catch((e) => console.warn("Socket offer Management approve notify error:", e.message));
+
           return res.json({
             success: true,
             message: "Management approval completed! Offer is now verified and ready to release to the candidate.",
@@ -430,6 +485,19 @@ module.exports = {
             approval_status: "REJECTED",
             offer_status: "DRAFT",
           });
+
+          sendRealtimeNotification({
+            recipient_role: "hr",
+            title: "Offer Rejected by Management ❌",
+            message: `Offer for ${offer.candidate_name} was rejected by Management (${approverName}).`,
+            type: "approval",
+            category: "Approvals",
+            link: "/requisition",
+            priority: "high",
+            source_module: "offers",
+            created_by: approverName,
+          }).catch((e) => console.warn("Socket offer Management reject notify error:", e.message));
+
           return res.json({
             success: true,
             message: "Offer rejected by Management.",
@@ -667,6 +735,19 @@ module.exports = {
             interview_stage: "JOINED",
           });
         }
+
+        // Send real-time notification to HR & Leadership
+        sendRealtimeNotification({
+          recipient_role: "hr",
+          title: "Candidate Digitally Accepted Offer! 🎉",
+          message: `${offer.candidate_name} has accepted the offer for ${offer.designation} (${offer.department}). Confirmed Joining Date: ${offer.candidate_confirmed_joining_date || offer.joining_date}.`,
+          type: "onboarding",
+          category: "Onboarding",
+          link: "/requisition",
+          priority: "high",
+          source_module: "offers",
+          created_by: offer.candidate_name,
+        }).catch((e) => console.warn("Socket offer accept notify error:", e.message));
 
         return res.json({
           success: true,

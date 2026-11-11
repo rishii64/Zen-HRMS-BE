@@ -56,6 +56,9 @@ app.put("/api/hr-events/:id", authenticate, HrEventController.updateEvent);
 app.delete("/api/hr-events/:id", authenticate, HrEventController.deleteEvent);
 app.post("/api/hr-events/:id/broadcast", authenticate, HrEventController.broadcastEvent);
 
+const http = require("http");
+const { initSocket } = require("./socket");
+
 // Database connection
 db.connectDB()
   .then(() => {
@@ -63,6 +66,9 @@ db.connectDB()
   })
   .catch((err) => console.log("Error: " + err));
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+initSocket(server);
+
+server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });

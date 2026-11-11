@@ -1,4 +1,5 @@
-const { Resignation, User, Employee } = require("../config/db");
+const { sequelize, Resignation, User, Employee, Department } = require("../config/db");
+const { sendRealtimeNotification } = require("../socket");
 const { Op } = require("sequelize");
 
 const isLeadershipUser = (user = {}) => {
@@ -202,6 +203,400 @@ const DEFAULT_CLEARANCE_STEPS = [
   }
 ];
 
+// Helper: Populate actual assigned Reporting Manager and HOD for every resignation
+// and auto-advance flow to the next consecutive authorized personnel if an approver is not available
+async function populateAndAutoAdvanceResignations(records) {
+  if (!records || !records.length) return records;
+  const isArray = Array.isArray(records);
+  const list = isArray ? records : [records];
+  const empIds = [...new Set(list.map((r) => r.employee_id).filter(Boolean))];
+
+  const [users, emps, departments] = await Promise.all([
+    User.findAll({
+      where: { employee_id: { [Op.in]: empIds } },
+      attributes: [
+        "employee_id",
+        "name",
+        "dept",
+        "reporting_manager_id",
+        "reporting_manager",
+        "hod_id",
+        "hod_name",
+        "department_id",
+      ],
+    }),
+    Employee.findAll({
+      where: { employee_id: { [Op.in]: empIds } },
+      attributes: [
+        "employee_id",
+        "reporting_manager_id",
+        "reporting_manager",
+        "hod_id",
+        "hod_name",
+        "department_id",
+      ],
+    }),
+    Department.findAll({
+      attributes: ["id", "dept_name", "dept_code", "hod_employee_id", "hod_name"],
+    }),
+  ]);
+
+  const userMap = {};
+  users.forEach((u) => {
+    if (u.employee_id) userMap[u.employee_id.toLowerCase().trim()] = u;
+  });
+
+  const empMap = {};
+  emps.forEach((e) => {
+    if (e.employee_id) empMap[e.employee_id.toLowerCase().trim()] = e;
+  });
+
+  const deptById = {};
+  const deptByName = {};
+  departments.forEach((d) => {
+    if (d.id) deptById[d.id] = d;
+    if (d.dept_name) deptByName[d.dept_name.toLowerCase().trim()] = d;
+  });
+
+  // Collect any referenced supervisor IDs to resolve their actual names
+  const extraSupervisorIds = new Set();
+  users.forEach((u) => {
+    if (u.reporting_manager_id) extraSupervisorIds.add(u.reporting_manager_id);
+    if (u.hod_id) extraSupervisorIds.add(u.hod_id);
+  });
+  emps.forEach((e) => {
+    if (e.reporting_manager_id) extraSupervisorIds.add(e.reporting_manager_id);
+    if (e.hod_id) extraSupervisorIds.add(e.hod_id);
+  });
+  departments.forEach((d) => {
+    if (d.hod_employee_id) extraSupervisorIds.add(d.hod_employee_id);
+  });
+  list.forEach((r) => {
+    if (r.manager_id) extraSupervisorIds.add(r.manager_id);
+    if (r.hod_id) extraSupervisorIds.add(r.hod_id);
+  });
+
+  const missingIds = [...extraSupervisorIds].filter((id) => {
+    if (!id || typeof id !== "string") return false;
+    const clean = id.toLowerCase().trim();
+    return clean && clean !== "n/a" && clean !== "none" && !userMap[clean];
+  });
+
+  if (missingIds.length > 0) {
+    try {
+      const allCasedIds = [...new Set([
+        ...missingIds,
+        ...missingIds.map((i) => i.toUpperCase()),
+        ...missingIds.map((i) => i.toLowerCase())
+      ])];
+      const [extraUsers, extraEmps] = await Promise.all([
+        User.findAll({
+          where: { employee_id: { [Op.in]: allCasedIds } },
+          attributes: ["employee_id", "name", "dept"]
+        }),
+        Employee.findAll({
+          where: { employee_id: { [Op.in]: allCasedIds } },
+          attributes: ["employee_id", "first_name", "last_name", "dept"]
+        })
+      ]);
+      extraUsers.forEach((u) => {
+        if (u.employee_id) userMap[u.employee_id.toLowerCase().trim()] = u;
+      });
+      extraEmps.forEach((e) => {
+        if (e.employee_id) empMap[e.employee_id.toLowerCase().trim()] = e;
+      });
+    } catch (_) {}
+  }
+
+  const processed = [];
+
+  for (const r of list) {
+    const row = typeof r.toJSON === "function" ? r.toJSON() : { ...r };
+    const empKey = (row.employee_id || "").toLowerCase().trim();
+    const u = userMap[empKey] || {};
+    const e = empMap[empKey] || {};
+
+    // 1. Resolve actual assigned reporting manager
+    let assignedMgrId = e.reporting_manager_id || u.reporting_manager_id || row.manager_id || null;
+    let assignedMgrName = null;
+
+    if (assignedMgrId) {
+      const cleanMgrId = assignedMgrId.toLowerCase().trim();
+      if (cleanMgrId === "n/a" || cleanMgrId === "none" || cleanMgrId === empKey) {
+        assignedMgrId = null;
+      } else {
+        const mgrUser = userMap[cleanMgrId];
+        const mgrEmp = empMap[cleanMgrId];
+        if (mgrUser && mgrUser.name) {
+          assignedMgrName = mgrUser.name;
+        } else if (mgrEmp) {
+          assignedMgrName = `${mgrEmp.first_name || ""} ${mgrEmp.last_name || ""}`.trim() || mgrEmp.name;
+        } else {
+          assignedMgrName = e.reporting_manager || u.reporting_manager || row.manager_name || null;
+        }
+      }
+    } else {
+      assignedMgrName = e.reporting_manager || u.reporting_manager || row.manager_name || null;
+    }
+
+    if (
+      assignedMgrName === "N/A" ||
+      assignedMgrName === "None" ||
+      assignedMgrName === "Management" ||
+      assignedMgrName === "Reporting Manager"
+    ) {
+      if (!assignedMgrId) assignedMgrName = null;
+    }
+
+    // 2. Resolve actual assigned Department Head (HOD)
+    let assignedHodId = e.hod_id || u.hod_id || row.hod_id || null;
+    let assignedHodName = null;
+
+    const deptId = e.department_id || u.department_id;
+    const dRec = deptById[deptId] || deptByName[(row.dept || "").toLowerCase().trim()] || null;
+    if (!assignedHodId && dRec && dRec.hod_employee_id) {
+      assignedHodId = dRec.hod_employee_id;
+    }
+
+    if (assignedHodId) {
+      const cleanHodId = assignedHodId.toLowerCase().trim();
+      if (cleanHodId === "n/a" || cleanHodId === "none" || cleanHodId === empKey) {
+        assignedHodId = null;
+      } else {
+        const hodUser = userMap[cleanHodId];
+        const hodEmp = empMap[cleanHodId];
+        if (hodUser && hodUser.name) {
+          assignedHodName = hodUser.name;
+        } else if (hodEmp) {
+          assignedHodName = `${hodEmp.first_name || ""} ${hodEmp.last_name || ""}`.trim() || hodEmp.name;
+        } else if (dRec && dRec.hod_name) {
+          assignedHodName = dRec.hod_name;
+        } else {
+          assignedHodName = e.hod_name || u.hod_name || row.hod_name || null;
+        }
+      }
+    } else {
+      assignedHodName = e.hod_name || u.hod_name || row.hod_name || null;
+    }
+
+    if (assignedHodName === "Department Head" && !assignedHodId) {
+      assignedHodName = null;
+    }
+
+    // Set assigned supervisors on row
+    row.assigned_manager_id = assignedMgrId;
+    row.assigned_manager_name = assignedMgrName;
+    row.assigned_hod_id = assignedHodId;
+    row.assigned_hod_name = assignedHodName;
+
+    let needUpdate = false;
+    const updateFields = {};
+
+    // Synchronize row and DB with the REAL assigned manager name & ID
+    if (assignedMgrId) {
+      if (row.manager_id !== assignedMgrId || row.manager_name !== assignedMgrName) {
+        row.manager_id = assignedMgrId;
+        row.manager_name = assignedMgrName;
+        updateFields.manager_id = assignedMgrId;
+        updateFields.manager_name = assignedMgrName;
+        needUpdate = true;
+      }
+    } else {
+      if (row.manager_id !== null) {
+        row.manager_id = null;
+        updateFields.manager_id = null;
+        needUpdate = true;
+      }
+      row.manager_name = assignedMgrName;
+    }
+
+    // Synchronize row and DB with the REAL assigned HOD name & ID
+    if (assignedHodId) {
+      if (row.hod_id !== assignedHodId || row.hod_name !== assignedHodName) {
+        row.hod_id = assignedHodId;
+        row.hod_name = assignedHodName;
+        updateFields.hod_id = assignedHodId;
+        updateFields.hod_name = assignedHodName;
+        needUpdate = true;
+      }
+    } else {
+      if (row.hod_id !== null) {
+        row.hod_id = null;
+        updateFields.hod_id = null;
+        needUpdate = true;
+      }
+      row.hod_name = assignedHodName;
+    }
+
+    // If waiting for Manager, but employee has NO assigned manager:
+    if (
+      row.status === "Pending Manager Review" &&
+      (!assignedMgrId || assignedMgrId.toLowerCase() === empKey)
+    ) {
+      if (assignedHodId && assignedHodId.toLowerCase() !== empKey) {
+        row.status = "Pending HOD Approval";
+        row.approval_stage = "PENDING_HOD";
+        updateFields.status = "Pending HOD Approval";
+        updateFields.approval_stage = "PENDING_HOD";
+        updateFields.manager_decision = "Bypassed";
+        updateFields.manager_comments = "Bypassed directly to HOD (No reporting manager assigned)";
+        needUpdate = true;
+      } else {
+        row.status = "Pending HR Approval";
+        row.approval_stage = "PENDING_HR";
+        updateFields.status = "Pending HR Approval";
+        updateFields.approval_stage = "PENDING_HR";
+        updateFields.manager_decision = "Bypassed";
+        updateFields.hod_decision = "Bypassed";
+        updateFields.manager_comments = "Bypassed directly to HR (No reporting manager assigned)";
+        updateFields.hod_comments = "Bypassed directly to HR (No HOD assigned)";
+        needUpdate = true;
+      }
+    }
+    // If waiting for HOD, but employee has NO assigned HOD:
+    else if (
+      row.status === "Pending HOD Approval" &&
+      (!assignedHodId || assignedHodId.toLowerCase() === empKey)
+    ) {
+      row.status = "Pending HR Approval";
+      row.approval_stage = "PENDING_HR";
+      updateFields.status = "Pending HR Approval";
+      updateFields.approval_stage = "PENDING_HR";
+      updateFields.hod_decision = "Bypassed";
+      updateFields.hod_comments = "Bypassed directly to HR (No HOD assigned)";
+      needUpdate = true;
+    }
+
+    if (needUpdate && r.update) {
+      try {
+        await r.update(updateFields);
+      } catch (_) {}
+    }
+
+    processed.push(row);
+  }
+
+  return isArray ? processed : processed[0];
+}
+
+// Helper: Verify if user belongs to the respective department of a serial clearance step
+function isUserAuthorizedForDeptStep(step, resignation, user) {
+  if (!step || !resignation || !user) return false;
+
+  const userEmpId = String(user.employee_id || user.id || "").trim().toLowerCase();
+  const resigningEmpId = String(resignation.employee_id || "").trim().toLowerCase();
+  const userNameClean = String(user.name || "").trim().toLowerCase();
+
+  // 1. Resigning employee can never clear their own pipeline steps
+  if (userEmpId && resigningEmpId && userEmpId === resigningEmpId) {
+    return false;
+  }
+
+  // 2. CRITICAL PREVENT CROSS-CLEARANCE:
+  // A person from one department who already cleared a different step cannot clear subsequent steps!
+  // E.g. If Tech manager cleared Tech clearance, they cannot clear Admin, HR, Accounts, etc.
+  const steps = Array.isArray(resignation.clearance_steps) ? resignation.clearance_steps : [];
+  const hasClearedOtherStep = steps.some(
+    (s) => (s.id !== step.id && s.order !== step.order) && (
+      (s.cleared_by && String(s.cleared_by).trim().toLowerCase() === userEmpId) ||
+      (s.cleared_by_name && userNameClean && String(s.cleared_by_name).trim().toLowerCase() === userNameClean)
+    )
+  );
+
+  const assignedEmpId = String(step.assigned_emp_id || "").trim().toLowerCase();
+  if (hasClearedOtherStep && (!assignedEmpId || assignedEmpId !== userEmpId)) {
+    return false;
+  }
+
+  // 3. Specific employee assigned by HR (mapped by employee ID)
+  // If an approver is explicitly assigned, ONLY that employee ID is authorized!
+  // HR and other departments cannot give clearance on their behalf.
+  if (assignedEmpId) {
+    return userEmpId === assignedEmpId;
+  }
+
+  // 4. Fallback: If no specific employee was mapped, verify STRICT department membership
+  // Note: Software role 'admin' is superuser authorization in HRMS, NOT physical Admin & Facilities!
+  const userRole = String(user.role || user.job_role || "").trim().toLowerCase();
+  const userDept = String(user.dept || user.department || "").trim().toLowerCase();
+  const userDesig = String(user.designation || "").trim().toLowerCase();
+  const stepId = String(step.id || "").trim().toLowerCase();
+  const stepDeptKey = String(step.dept_key || "").trim().toLowerCase();
+  const stepName = String(step.name || "").trim().toLowerCase();
+  const resDept = String(resignation.dept || "").trim().toLowerCase();
+  const resMgrId = String(resignation.manager_id || resignation.reporting_manager_id || "").trim().toLowerCase();
+  const resHodId = String(resignation.hod_id || "").trim().toLowerCase();
+
+  const matchDept = (d1, d2) => {
+    if (!d1 || !d2) return false;
+    return d1 === d2 || d1.includes(d2) || d2.includes(d1);
+  };
+
+  // Home Department Step (e.g. "Engineering / Tech Clearance" or step.id === "dept")
+  const isHomeDeptStep = stepId === "dept" ||
+                         (resDept && (matchDept(stepDeptKey, resDept) || matchDept(stepName, resDept)));
+  if (isHomeDeptStep) {
+    if (resHodId && userEmpId === resHodId) return true;
+    if (resMgrId && userEmpId === resMgrId) return true;
+    if (resDept && matchDept(userDept, resDept)) return true;
+    return false;
+  }
+
+  // Admin / Facilities Clearance Step
+  // Physical office administration, facilities, desk keys, access cards.
+  // Tech / Software engineering personnel must NEVER be authorized for Admin clearance!
+  const isAdminStep = stepId === "admin" || stepDeptKey.includes("admin") || stepDeptKey.includes("facilities") || stepName.includes("admin");
+  if (isAdminStep) {
+    if (userDept.includes("tech") || userDept.includes("engineer") || userDept.includes("develop") || userDept.includes("software")) {
+      return false;
+    }
+    if (userDept.includes("admin") || userDept.includes("facilities") || userDept.includes("operations") || userDesig.includes("admin") || userDesig.includes("facilities")) {
+      return true;
+    }
+    return false;
+  }
+
+  // HR / Human Resources Clearance Step
+  const isHrStep = stepId === "hr" || stepDeptKey === "hr" || stepDeptKey.includes("human") || stepName.includes("hr clearance") || stepName.includes("human resources");
+  if (isHrStep) {
+    if (userDept.includes("tech") || userDept.includes("engineer") || userDept.includes("develop")) {
+      return false;
+    }
+    if (userRole === "hr" || userRole === "hrmanager" || userRole === "chro" || userDept.includes("hr") || userDept.includes("human") || userDesig.includes("hr") || userDesig.includes("chro")) {
+      return true;
+    }
+    return false;
+  }
+
+  // Accounts / Finance Clearance Step
+  const isAccountsStep = stepId === "accounts" || stepDeptKey.includes("account") || stepDeptKey.includes("finance") || stepDeptKey.includes("payroll") || stepName.includes("accounts");
+  if (isAccountsStep) {
+    if (userDept.includes("tech") || userDept.includes("engineer") || userDept.includes("develop")) {
+      return false;
+    }
+    if (userRole === "accounts" || userRole === "finance" || userRole === "payroll" || userDept.includes("account") || userDept.includes("finance") || userDept.includes("payroll") || userDesig.includes("account") || userDesig.includes("finance") || userDesig.includes("payroll")) {
+      return true;
+    }
+    return false;
+  }
+
+  // IT Clearance Step (hardware, system credentials, laptops)
+  const isItStep = stepId === "it" || stepDeptKey === "it" || stepDeptKey.includes("information tech") || stepName.includes("it clearance");
+  if (isItStep) {
+    if (userRole === "it" || userDept.includes("it") || userDept.includes("information tech") || userDesig.includes("it ") || userDesig.includes("network") || userDesig.includes("system admin")) {
+      return true;
+    }
+    return false;
+  }
+
+  // Custom Department Step (e.g. Library, Legal, etc.)
+  if (stepDeptKey && userDept && matchDept(userDept, stepDeptKey)) {
+    return true;
+  }
+
+  return false;
+}
+
 const ResignationController = {
   // GET /api/auth/resignation
   async getResignations(req, res) {
@@ -242,21 +637,23 @@ const ResignationController = {
         }
       } else if (isLeadOrManager) {
         const targetDept = (dept && dept !== "All") ? dept : (userDept && userDept !== "Other" && userDept !== "General" ? userDept : null);
+        const empIdClean = (employee_id || "").trim();
         const orConditions = [
-          { employee_id },
-          { tl_id: employee_id },
-          { manager_id: employee_id },
-          { hod_id: employee_id },
-          { handover_person_id: employee_id }
+          { employee_id: { [Op.iLike]: empIdClean } },
+          { tl_id: { [Op.iLike]: empIdClean } },
+          { manager_id: { [Op.iLike]: empIdClean } },
+          { hod_id: { [Op.iLike]: empIdClean } },
+          { handover_person_id: { [Op.iLike]: empIdClean } }
         ];
         if (targetDept) {
           orConditions.push({ dept: { [Op.iLike]: targetDept.trim() } });
         }
         whereClause[Op.or] = orConditions;
       } else {
+        const empIdClean = (employee_id || "").trim();
         whereClause[Op.or] = [
-          { employee_id },
-          { handover_person_id: employee_id }
+          { employee_id: { [Op.iLike]: empIdClean } },
+          { handover_person_id: { [Op.iLike]: empIdClean } }
         ];
       }
 
@@ -282,7 +679,9 @@ const ResignationController = {
         order: [["created_at", "DESC"]],
       });
 
-      return res.json({ success: true, data: resignations });
+      const populated = await populateAndAutoAdvanceResignations(resignations);
+
+      return res.json({ success: true, data: populated });
     } catch (err) {
       console.error("Get resignations error:", err.message);
       return res.status(500).json({ error: "Failed to fetch resignation records" });
@@ -303,19 +702,23 @@ const ResignationController = {
       const active = all.find(r => r.status !== "Cancelled" && r.status !== "Withdrawn" && r.status !== "Rejected") || all[0] || null;
 
       // Also check if current employee has any pending handovers assigned to them by HOD
+      const empIdClean = (employee_id || "").trim();
       const assignedHandovers = await Resignation.findAll({
         where: {
-          handover_person_id: employee_id,
+          handover_person_id: { [Op.iLike]: empIdClean },
           status: { [Op.notIn]: ["Cancelled", "Rejected", "Separation Completed"] }
         },
         order: [["created_at", "DESC"]]
       });
 
+      const populatedActive = active ? (await populateAndAutoAdvanceResignations([active]))[0] : null;
+      const populatedHistory = await populateAndAutoAdvanceResignations(all);
+
       return res.json({
         success: true,
         data: {
-          active,
-          history: all,
+          active: populatedActive,
+          history: populatedHistory,
           assignedHandovers
         }
       });
@@ -345,7 +748,8 @@ const ResignationController = {
         return res.status(403).json({ error: "Unauthorized to view this resignation record" });
       }
 
-      return res.json({ success: true, data: record });
+      const populated = await populateAndAutoAdvanceResignations([record]);
+      return res.json({ success: true, data: populated[0] });
     } catch (err) {
       console.error("Get resignation by id error:", err.message);
       return res.status(500).json({ error: "Failed to fetch resignation record" });
@@ -433,56 +837,111 @@ const ResignationController = {
         }
       }
 
-      // 2. Look up Manager (Reporting Manager) if not explicitly supplied
+      // 2. Look up Manager (Reporting Manager) if not explicitly supplied or resolve true name
       if (!assigned_manager_id) {
-        const repManagerName = emp?.reporting_manager || user?.reporting_manager;
-        if (repManagerName && repManagerName !== "N/A" && repManagerName !== "Admin") {
-          const mgrUser = await User.findOne({
-            where: {
-              name: { [Op.iLike]: repManagerName.trim() },
-              employee_id: { [Op.ne]: employee_id }
+        const repManagerId = emp?.reporting_manager_id || user?.reporting_manager_id;
+        if (repManagerId && repManagerId.toLowerCase() !== employee_id.toLowerCase() && repManagerId !== "N/A" && repManagerId !== "None") {
+          assigned_manager_id = repManagerId.trim();
+        } else {
+          const repManagerName = emp?.reporting_manager || user?.reporting_manager;
+          if (repManagerName && repManagerName !== "N/A" && repManagerName !== "Admin" && repManagerName !== "Management" && repManagerName !== "None") {
+            const mgrUser = await User.findOne({
+              where: {
+                name: { [Op.iLike]: repManagerName.trim() },
+                employee_id: { [Op.ne]: employee_id }
+              }
+            });
+            if (mgrUser) {
+              assigned_manager_id = mgrUser.employee_id;
+              assigned_manager_name = mgrUser.name;
             }
+          }
+        }
+      }
+
+      if (assigned_manager_id) {
+        try {
+          const mgrUser = await User.findOne({
+            where: { employee_id: { [Op.iLike]: assigned_manager_id.trim() } }
           });
           if (mgrUser) {
             assigned_manager_id = mgrUser.employee_id;
             assigned_manager_name = mgrUser.name;
           } else {
-            assigned_manager_name = repManagerName;
-          }
-        } else {
-          const mgrUser = await User.findOne({
-            where: {
-              dept: { [Op.iLike]: empDept.trim() },
-              role: "manager",
-              employee_id: { [Op.ne]: employee_id }
+            const mgrEmp = await Employee.findOne({
+              where: { employee_id: { [Op.iLike]: assigned_manager_id.trim() } }
+            });
+            if (mgrEmp) {
+              assigned_manager_id = mgrEmp.employee_id;
+              assigned_manager_name = `${mgrEmp.first_name || ""} ${mgrEmp.last_name || ""}`.trim() || mgrEmp.name;
             }
-          });
-          if (mgrUser) {
-            assigned_manager_id = mgrUser.employee_id;
-            assigned_manager_name = mgrUser.name;
           }
-        }
+        } catch (_) {}
       }
 
       // 3. Look up Department Head (HOD)
       if (!assigned_hod_id) {
-        const hodUser = await User.findOne({
-          where: {
-            dept: { [Op.iLike]: empDept.trim() },
-            role: "hod",
-            employee_id: { [Op.ne]: employee_id }
+        const hodEmpId = emp?.hod_id || user?.hod_id;
+        if (hodEmpId && hodEmpId.toLowerCase() !== employee_id.toLowerCase() && hodEmpId !== "N/A" && hodEmpId !== "None") {
+          assigned_hod_id = hodEmpId.trim();
+        } else {
+          if (emp?.department_id || user?.department_id) {
+            try {
+              const dRec = await Department.findByPk(emp?.department_id || user?.department_id);
+              if (dRec && dRec.hod_employee_id) {
+                assigned_hod_id = dRec.hod_employee_id.trim();
+                assigned_hod_name = dRec.hod_name || null;
+              }
+            } catch (_) {}
           }
-        });
-        if (hodUser) {
-          assigned_hod_id = hodUser.employee_id;
-          assigned_hod_name = hodUser.name;
+          if (!assigned_hod_id) {
+            const repHodName = emp?.hod_name || user?.hod_name;
+            if (repHodName && repHodName !== "Department Head" && repHodName !== "N/A" && repHodName !== "None") {
+              const hodUser = await User.findOne({
+                where: {
+                  name: { [Op.iLike]: repHodName.trim() },
+                  employee_id: { [Op.ne]: employee_id }
+                }
+              });
+              if (hodUser) {
+                assigned_hod_id = hodUser.employee_id;
+                assigned_hod_name = hodUser.name;
+              } else {
+                assigned_hod_name = repHodName;
+              }
+            }
+          }
         }
       }
 
+      if (assigned_hod_id) {
+        try {
+          const hodUser = await User.findOne({
+            where: { employee_id: { [Op.iLike]: assigned_hod_id.trim() } }
+          });
+          if (hodUser) {
+            assigned_hod_id = hodUser.employee_id;
+            assigned_hod_name = hodUser.name;
+          } else {
+            const hodEmp = await Employee.findOne({
+              where: { employee_id: { [Op.iLike]: assigned_hod_id.trim() } }
+            });
+            if (hodEmp) {
+              assigned_hod_id = hodEmp.employee_id;
+              assigned_hod_name = `${hodEmp.first_name || ""} ${hodEmp.last_name || ""}`.trim() || hodEmp.name;
+            }
+          }
+        } catch (_) {}
+      }
+
       // Determine initial stage in the hierarchical chain:
-      // TL (if available) -> Manager (if available) -> HOD (final approval) -> HR
+      // TL (if available) -> Manager (if available) -> HOD (if available) -> HR
       let initialStatus = "Draft";
       let initialStage = "DRAFT";
+      let managerDecision = null;
+      let managerComments = null;
+      let hodDecision = null;
+      let hodComments = null;
 
       if (!is_draft) {
         if (assigned_tl_id) {
@@ -494,9 +953,15 @@ const ResignationController = {
         } else if (assigned_hod_id) {
           initialStatus = "Pending HOD Approval";
           initialStage = "PENDING_HOD";
+          managerDecision = "Bypassed";
+          managerComments = "Bypassed directly to HOD (No reporting manager assigned)";
         } else {
           initialStatus = "Pending HR Approval";
           initialStage = "PENDING_HR";
+          managerDecision = "Bypassed";
+          managerComments = "Bypassed directly to HR (No reporting manager assigned)";
+          hodDecision = "Bypassed";
+          hodComments = "Bypassed directly to HR (No Department Head assigned)";
         }
       }
 
@@ -564,8 +1029,12 @@ const ResignationController = {
         tl_name: assigned_tl_name,
         manager_id: assigned_manager_id,
         manager_name: assigned_manager_name,
+        manager_decision: managerDecision,
+        manager_comments: managerComments,
         hod_id: assigned_hod_id,
         hod_name: assigned_hod_name,
+        hod_decision: hodDecision,
+        hod_comments: hodComments,
         approval_stage: initialStage,
         status: initialStatus,
         notifications: initialNotifications
@@ -578,11 +1047,46 @@ const ResignationController = {
         resignationRecord = await Resignation.create(payload);
       }
 
+      let routedToMsg = "HR Department";
+      if (initialStatus === "Pending TL Review") routedToMsg = `TL ${assigned_tl_name || "Team Lead"}`;
+      else if (initialStatus === "Pending Manager Review") routedToMsg = `Manager ${assigned_manager_name || "Reporting Manager"}`;
+      else if (initialStatus === "Pending HOD Approval") routedToMsg = `Department Head ${assigned_hod_name || "HOD"}`;
+
+      if (!is_draft) {
+        const targetApproverId = assigned_manager_id || assigned_tl_id || assigned_hod_id;
+        if (targetApproverId) {
+          sendRealtimeNotification({
+            recipient_id: targetApproverId,
+            title: "New Resignation Notice Submitted",
+            message: `${empName || employee_id} (${dept}) submitted resignation notice. Reason: ${reason || "Career transition"}.`,
+            type: "resignation",
+            category: "Resignation",
+            link: "/resignation",
+            priority: "high",
+            source_module: "resignation",
+            created_by: empName || employee_id,
+          }).catch((e) => console.warn("Socket resignation notify error:", e.message));
+        }
+
+        // Also notify HR
+        sendRealtimeNotification({
+          recipient_role: "hr",
+          title: `Resignation Notice: ${empName || employee_id}`,
+          message: `${empName || employee_id} (${dept}) submitted resignation notice. Target: ${routedToMsg}.`,
+          type: "resignation",
+          category: "Resignation",
+          link: "/resignation",
+          priority: "high",
+          source_module: "resignation",
+          created_by: empName || employee_id,
+        }).catch((e) => console.warn("Socket resignation HR notify error:", e.message));
+      }
+
       return res.status(201).json({
         success: true,
         message: is_draft
           ? "Resignation draft saved successfully!"
-          : `Resignation submitted successfully! Routed to ${assigned_tl_name ? `TL ${assigned_tl_name}` : (assigned_manager_name ? `Manager ${assigned_manager_name}` : "Department Head")} with HR copy dispatched for live monitoring.`,
+          : `Resignation submitted successfully! Routed to ${routedToMsg} with HR copy dispatched for live monitoring.`,
         data: resignationRecord
       });
     } catch (err) {
@@ -613,13 +1117,16 @@ const ResignationController = {
       let nextStage;
 
       if (isApproved) {
-        // Move to Manager if available, otherwise directly to HOD
-        if (resignation.manager_id || resignation.manager_name) {
+        // Move to Manager if available, otherwise consecutive fallback directly to HOD or HR
+        if (resignation.manager_id && resignation.manager_id !== "N/A" && resignation.manager_id !== "None") {
           nextStatus = "Pending Manager Review";
           nextStage = "PENDING_MANAGER";
-        } else {
+        } else if (resignation.hod_id && resignation.hod_id !== "N/A" && resignation.hod_id !== "None") {
           nextStatus = "Pending HOD Approval";
           nextStage = "PENDING_HOD";
+        } else {
+          nextStatus = "Pending HR Approval";
+          nextStage = "PENDING_HR";
         }
       } else {
         nextStatus = "Rejected by TL";
@@ -629,10 +1136,10 @@ const ResignationController = {
       const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
       notifications.push({
         id: Date.now(),
-        target: isApproved ? (resignation.manager_id ? "MANAGER" : "HOD") : "EMPLOYEE",
-        recipient: isApproved ? (resignation.manager_name || "Manager") : resignation.name,
+        target: isApproved ? (nextStage === "PENDING_MANAGER" ? "MANAGER" : (nextStage === "PENDING_HOD" ? "HOD" : "HR")) : "EMPLOYEE",
+        recipient: isApproved ? (resignation.manager_name || resignation.hod_name || "HR Department") : resignation.name,
         type: "TL_DECISION",
-        title: isApproved ? "TL Endorsement - Routed to Manager" : "Resignation Rejected by TL",
+        title: isApproved ? `TL Endorsement - Routed to ${nextStatus}` : "Resignation Rejected by TL",
         message: isApproved
           ? `Team Lead ${name || "TL"} has approved and recommended ${resignation.name}'s resignation with comments: "${comments || "Recommended"}". Next: ${nextStatus}.`
           : `Team Lead ${name || "TL"} has rejected ${resignation.name}'s resignation. Reason: ${comments || "Not recommended"}`,
@@ -682,18 +1189,38 @@ const ResignationController = {
       }
 
       const isApproved = decision === "Approved";
-      const nextStatus = isApproved ? "Pending HOD Approval" : "Rejected by Manager";
-      const nextStage = isApproved ? "PENDING_HOD" : "REJECTED";
+      let nextStatus;
+      let nextStage;
+      let extraUpdate = {};
+
+      if (isApproved) {
+        // If HOD is available, route to HOD; otherwise consecutive fallback directly to HR
+        const hasHod = resignation.hod_id && resignation.hod_id !== "N/A" && resignation.hod_id !== "None";
+        if (hasHod) {
+          nextStatus = "Pending HOD Approval";
+          nextStage = "PENDING_HOD";
+        } else {
+          nextStatus = "Pending HR Approval";
+          nextStage = "PENDING_HR";
+          extraUpdate = {
+            hod_decision: "Bypassed",
+            hod_comments: "Bypassed directly to HR (No Department Head assigned)"
+          };
+        }
+      } else {
+        nextStatus = "Rejected by Manager";
+        nextStage = "REJECTED";
+      }
 
       const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
       notifications.push({
         id: Date.now(),
-        target: isApproved ? "HOD" : "EMPLOYEE",
-        recipient: isApproved ? (resignation.hod_name || "Department Head") : resignation.name,
+        target: isApproved ? (nextStage === "PENDING_HR" ? "HR" : "HOD") : "EMPLOYEE",
+        recipient: isApproved ? (nextStage === "PENDING_HR" ? "HR Department" : (resignation.hod_name || "Department Head")) : resignation.name,
         type: "MANAGER_DECISION",
-        title: isApproved ? "Manager Endorsement - Routed to HOD" : "Resignation Rejected by Manager",
+        title: isApproved ? `Manager Endorsement - Routed to ${nextStatus}` : "Resignation Rejected by Manager",
         message: isApproved
-          ? `Manager ${name || "Manager"} has approved ${resignation.name}'s resignation. Forwarded to HOD for final departmental approval.`
+          ? `Manager ${name || "Manager"} has approved ${resignation.name}'s resignation. Next stage: ${nextStatus}.`
           : `Manager ${name || "Manager"} has rejected ${resignation.name}'s resignation. Reason: ${comments || "Not approved"}`,
         created_at: new Date().toISOString()
       });
@@ -707,13 +1234,29 @@ const ResignationController = {
         manager_comments: comments || "",
         manager_action_date: new Date(),
         manager_recommended_lwd: recommended_lwd || resignation.tl_recommended_lwd || resignation.last_working_date,
+        ...extraUpdate,
         notifications
       });
+
+      // Send real-time notification to employee and HOD
+      sendRealtimeNotification({
+        recipient_id: resignation.employee_id,
+        title: isApproved ? "Resignation Endorsed by Manager" : "Resignation Rejected by Manager",
+        message: isApproved
+          ? `Manager ${name || "Manager"} approved your resignation notice. Next stage: ${nextStatus}.`
+          : `Manager ${name || "Manager"} rejected your resignation notice. Reason: ${comments || "Not approved"}.`,
+        type: "resignation",
+        category: "Resignation",
+        link: "/resignation",
+        priority: isApproved ? "normal" : "high",
+        source_module: "resignation",
+        created_by: name || "Manager",
+      }).catch((e) => console.warn("Socket manager review notify error:", e.message));
 
       return res.json({
         success: true,
         message: isApproved
-          ? "Resignation recommended and routed to Department Head (HOD) for final department approval."
+          ? `Resignation recommended and routed to ${nextStatus}.`
           : "Resignation has been rejected by Manager.",
         data: resignation
       });
@@ -839,6 +1382,36 @@ const ResignationController = {
         notifications
       });
 
+      // Send real-time notification to employee
+      sendRealtimeNotification({
+        recipient_id: resignation.employee_id,
+        title: isApproved ? "Resignation Approved by Department Head" : "Resignation Rejected by HOD",
+        message: isApproved
+          ? `HOD ${name || "HOD"} approved your resignation notice. Handover assigned to ${handover_person_name || "team member"}.`
+          : `HOD ${name || "HOD"} rejected your resignation notice. Reason: ${comments || "Not approved"}.`,
+        type: "resignation",
+        category: "Resignation",
+        link: "/resignation",
+        priority: isApproved ? "normal" : "high",
+        source_module: "resignation",
+        created_by: name || "HOD",
+      }).catch((e) => console.warn("Socket HOD review notify error:", e.message));
+
+      if (isApproved && handover_person_id) {
+        // Notify handover assignee
+        sendRealtimeNotification({
+          recipient_id: handover_person_id,
+          title: "New Handover Assignment",
+          message: `You have been assigned handover responsibilities for ${resignation.name}'s resignation transition.`,
+          type: "resignation",
+          category: "Resignation",
+          link: "/resignation",
+          priority: "high",
+          source_module: "resignation",
+          created_by: name || "HOD",
+        }).catch((e) => console.warn("Socket handover notify error:", e.message));
+      }
+
       return res.json({
         success: true,
         message: isApproved
@@ -930,12 +1503,14 @@ const ResignationController = {
       }
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      const isAssignedPerson = resignation.handover_person_id === employee_id;
-      const isHOD = role === "hod" || resignation.hod_id === employee_id;
+      const userCodeClean = (employee_id || "").trim().toLowerCase();
+      const isAssignedPerson = resignation.handover_person_id && (resignation.handover_person_id.trim().toLowerCase() === userCodeClean);
+      const isHOD = role === "hod" || (resignation.hod_id && resignation.hod_id.trim().toLowerCase() === userCodeClean);
+      const isManager = resignation.manager_id && (resignation.manager_id.trim().toLowerCase() === userCodeClean);
 
-      if (!isAssignedPerson && !isHOD && !isHrOrAdmin) {
+      if (!isAssignedPerson && !isHOD && !isManager && !isHrOrAdmin) {
         return res.status(403).json({
-          error: `Only the HOD-assigned employee (${resignation.handover_person_name || "Assignee"}) or HOD can confirm handover completion.`
+          error: `Only the HOD-assigned team lead, manager, or colleague (${resignation.handover_person_name || "Assignee"}), reporting manager, or HOD can confirm handover completion.`
         });
       }
 
@@ -1149,6 +1724,21 @@ const ResignationController = {
         notifications
       });
 
+      // Send real-time notification to employee
+      sendRealtimeNotification({
+        recipient_id: resignation.employee_id,
+        title: isApproved ? "Resignation Approved by HR" : "Resignation Rejected by HR",
+        message: isApproved
+          ? `HR Head ${name || "HR"} has granted final approval for your resignation! Confirmed LWD: ${resolvedLwd}.`
+          : `HR Head ${name || "HR"} has rejected your resignation notice. Reason: ${comments || "Not approved"}.`,
+        type: "resignation",
+        category: "Resignation",
+        link: "/resignation",
+        priority: isApproved ? "normal" : "high",
+        source_module: "resignation",
+        created_by: name || "HR Head",
+      }).catch((e) => console.warn("Socket HR review notify error:", e.message));
+
       return res.json({
         success: true,
         message: isApproved
@@ -1198,6 +1788,9 @@ const ResignationController = {
             dept_key: deptKey,
             order: index + 1,
             status: "Pending",
+            assigned_emp_id: (typeof dept === "object" && dept.assigned_emp_id) ? String(dept.assigned_emp_id).trim() : null,
+            assigned_emp_name: (typeof dept === "object" && dept.assigned_emp_name) ? String(dept.assigned_emp_name).trim() : null,
+            assigned_emp_designation: (typeof dept === "object" && dept.assigned_emp_designation) ? String(dept.assigned_emp_designation).trim() : null,
             cleared_by: null,
             cleared_by_name: null,
             cleared_at: null,
@@ -1228,6 +1821,9 @@ const ResignationController = {
                 dept_key: trimmed,
                 order: nextOrder,
                 status: "Pending",
+                assigned_emp_id: null,
+                assigned_emp_name: null,
+                assigned_emp_designation: null,
                 cleared_by: null,
                 cleared_by_name: null,
                 cleared_at: null,
@@ -1244,31 +1840,39 @@ const ResignationController = {
       }
 
       const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
+      const firstStepOfficer = steps[0]?.assigned_emp_name ? ` (Assigned to: ${steps[0].assigned_emp_name} - ${steps[0].assigned_emp_id})` : "";
       notifications.push({
         id: Date.now(),
         target: "CLEARANCE_PIPELINE",
-        recipient: steps[0].dept_key,
+        recipient: steps[0]?.assigned_emp_id || steps[0]?.dept_key,
         type: "CLEARANCE_RAISED",
         title: "Clearance Form Raised - Step 1 Active",
-        message: `Clearance form raised by HR ${name || "HR"}. Step 1 (${steps[0].name}) is now ACTIVE in serial order.`,
+        message: `Clearance form raised by HR ${name || "HR"}. Step 1 (${steps[0].name}) is now ACTIVE in serial order${firstStepOfficer}.`,
         created_at: new Date().toISOString()
       });
 
-      await resignation.update({
+      const updatedSteps = JSON.parse(JSON.stringify(steps));
+      resignation.changed("clearance_steps", true);
+      resignation.changed("notifications", true);
+
+      await Resignation.update({
         clearance_raised: true,
         clearance_raised_by: name || "HR",
         clearance_raised_date: new Date(),
-        clearance_steps: steps,
+        clearance_steps: updatedSteps,
         clearance_overall_status: "In Progress",
         approval_stage: "CLEARANCE_IN_PROGRESS",
         status: "Clearance In Progress",
         notifications
-      });
+      }, { where: { id: resignation.id } });
+
+      const refreshed = await Resignation.findByPk(id);
+      const populated = await populateAndAutoAdvanceResignations([refreshed]);
 
       return res.json({
         success: true,
         message: "Clearance form raised successfully! Serial department clearance pipeline initiated.",
-        data: resignation
+        data: populated[0]
       });
     } catch (err) {
       console.error("Raise clearance error:", err.message);
@@ -1280,7 +1884,7 @@ const ResignationController = {
   async addCustomClearanceDept(req, res) {
     try {
       const { id } = req.params;
-      const { department_name } = req.body;
+      const { department_name, assigned_emp_id, assigned_emp_name, assigned_emp_designation } = req.body;
       const { name, role } = req.user;
 
       const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
@@ -1311,6 +1915,9 @@ const ResignationController = {
         dept_key: trimmed,
         order: nextOrder,
         status: "Pending",
+        assigned_emp_id: assigned_emp_id ? String(assigned_emp_id).trim() : null,
+        assigned_emp_name: assigned_emp_name ? String(assigned_emp_name).trim() : null,
+        assigned_emp_designation: assigned_emp_designation ? String(assigned_emp_designation).trim() : null,
         cleared_by: null,
         cleared_by_name: null,
         cleared_at: null,
@@ -1328,22 +1935,29 @@ const ResignationController = {
       notifications.push({
         id: Date.now(),
         target: trimmed,
-        recipient: `${trimmed} Department`,
+        recipient: assigned_emp_id || `${trimmed} Department`,
         type: "CUSTOM_DEPT_ADDED",
         title: `Clearance Pipeline: Added ${trimmed}`,
-        message: `${trimmed} has been added by HR ${name || "HR"} to the serial clearance pipeline for ${resignation.name}.`,
+        message: `${trimmed} has been added by HR ${name || "HR"} to the serial clearance pipeline for ${resignation.name}${assigned_emp_name ? ` (Assigned to: ${assigned_emp_name})` : ""}.`,
         created_at: new Date().toISOString()
       });
 
-      await resignation.update({
-        clearance_steps: steps,
+      const updatedSteps = JSON.parse(JSON.stringify(steps));
+      resignation.changed("clearance_steps", true);
+      resignation.changed("notifications", true);
+
+      await Resignation.update({
+        clearance_steps: updatedSteps,
         notifications
-      });
+      }, { where: { id: resignation.id } });
+
+      const refreshed = await Resignation.findByPk(id);
+      const populated = await populateAndAutoAdvanceResignations([refreshed]);
 
       return res.json({
         success: true,
         message: `Department "${trimmed}" added to clearance pipeline successfully!`,
-        data: resignation
+        data: populated[0]
       });
     } catch (err) {
       console.error("Add custom clearance dept error:", err.message);
@@ -1363,9 +1977,30 @@ const ResignationController = {
         return res.status(404).json({ error: "Resignation record not found" });
       }
 
-      const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
-      if (resignation.employee_id === employee_id && !isHrOrAdmin) {
-        return res.status(403).json({ error: "Employees cannot clear their own clearance pipeline steps" });
+      // Fetch user profile from database to get their actual department and designation
+      const userProfile = await User.findOne({
+        where: {
+          [Op.or]: [
+            { employee_id: employee_id || "" },
+            { id: req.user.id || 0 }
+          ]
+        }
+      });
+
+      const effectiveUser = {
+        employee_id,
+        name,
+        role: (userProfile?.role || role || "").toLowerCase().trim(),
+        dept: (userProfile?.dept || req.user?.dept || "").trim(),
+        designation: (userProfile?.designation || req.user?.designation || "").trim(),
+        is_hod: userProfile?.is_hod || false
+      };
+
+      const userEmpIdClean = (employee_id || "").trim().toLowerCase();
+      const resEmpIdClean = (resignation.employee_id || "").trim().toLowerCase();
+
+      if (userEmpIdClean && resEmpIdClean && userEmpIdClean === resEmpIdClean) {
+        return res.status(403).json({ error: "Resigning employees cannot clear their own clearance pipeline steps" });
       }
 
       if (!resignation.clearance_raised || !Array.isArray(resignation.clearance_steps)) {
@@ -1381,7 +2016,7 @@ const ResignationController = {
 
       const targetStep = steps[targetIndex];
 
-      // SERIAL ORDER CHECK: All previous steps (order < targetStep.order) MUST be Cleared!
+      // 1. SERIAL ORDER CHECK: All previous steps (order < targetStep.order) MUST be Cleared!
       for (let i = 0; i < targetIndex; i++) {
         if (steps[i].status !== "Cleared") {
           return res.status(400).json({
@@ -1390,10 +2025,21 @@ const ResignationController = {
         }
       }
 
+      // 2. DEPARTMENT PERMISSION CHECK: Only the designated officer from that specific department can give clearance!
+      // HR cannot give clearance on behalf of another department.
+      const isAuthorized = isUserAuthorizedForDeptStep(targetStep, resignation, effectiveUser);
+      if (!isAuthorized) {
+        const assignedLabel = targetStep.assigned_emp_name ? `${targetStep.assigned_emp_name} (${targetStep.assigned_emp_id})` : (targetStep.dept_key || targetStep.name);
+        return res.status(403).json({
+          error: `Permission denied: Clearance for "${targetStep.name}" can only be granted by the designated officer from ${targetStep.dept_key || targetStep.name} (${assignedLabel}). HR and other departments cannot give clearance on their behalf.`
+        });
+      }
+
       // Mark this step as Cleared
       targetStep.status = "Cleared";
       targetStep.cleared_by = employee_id;
-      targetStep.cleared_by_name = name || "Authorized Officer";
+      targetStep.cleared_by_name = name || targetStep.assigned_emp_name || "Authorized Officer";
+      targetStep.cleared_by_dept = effectiveUser.dept || targetStep.dept_key;
       targetStep.cleared_at = new Date().toISOString();
       targetStep.remarks = remarks || "Cleared with no outstanding dues";
       if (Array.isArray(checklist)) {
@@ -1431,37 +2077,120 @@ const ResignationController = {
       } else {
         const nextActiveStep = steps.find(s => s.status === "Pending");
         if (nextActiveStep) {
+          const nextOfficerInfo = nextActiveStep.assigned_emp_name ? ` (Assigned to: ${nextActiveStep.assigned_emp_name} - ${nextActiveStep.assigned_emp_id})` : "";
           notifications.push({
             id: Date.now(),
             target: nextActiveStep.dept_key,
-            recipient: `${nextActiveStep.name} Officer`,
+            recipient: nextActiveStep.assigned_emp_id || `${nextActiveStep.name} Officer`,
             type: "NEXT_STEP_ACTIVE",
             title: `Step ${nextActiveStep.order} Active: ${nextActiveStep.name}`,
-            message: `Previous clearance step "${targetStep.name}" was cleared by ${name}. Step ${nextActiveStep.order} (${nextActiveStep.name}) is now ACTIVE in serial order.`,
+            message: `Previous clearance step "${targetStep.name}" was cleared by ${name}. Step ${nextActiveStep.order} (${nextActiveStep.name}) is now ACTIVE in serial order${nextOfficerInfo}.`,
             created_at: new Date().toISOString()
           });
         }
       }
 
-      await resignation.update({
-        clearance_steps: steps,
+      const updatedSteps = JSON.parse(JSON.stringify(steps));
+      resignation.changed("clearance_steps", true);
+      resignation.changed("notifications", true);
+
+      await Resignation.update({
+        clearance_steps: updatedSteps,
         clearance_overall_status: allCleared ? "Completed" : "In Progress",
         approval_stage: nextStage,
         status: nextStatus,
         notifications,
         ...legacyUpdates
-      });
+      }, { where: { id: resignation.id } });
+
+      const refreshed = await Resignation.findByPk(id);
+      const populated = await populateAndAutoAdvanceResignations([refreshed]);
 
       return res.json({
         success: true,
         message: allCleared
           ? `Final clearance completed! Flow has moved to HR for final clearance & Exit Interview scheduling.`
           : `Clearance for "${targetStep.name}" marked as Cleared (Green). Next step in serial order unlocked.`,
-        data: resignation
+        data: populated[0]
       });
     } catch (err) {
       console.error("Clear department step error:", err.message);
       return res.status(500).json({ error: "Failed to process department clearance" });
+    }
+  },
+
+  // PATCH /api/auth/resignation/:id/reassign-step-approver
+  async reassignStepApprover(req, res) {
+    try {
+      const { id } = req.params;
+      const { step_id, assigned_emp_id, assigned_emp_name, assigned_emp_designation } = req.body;
+      const { name, role } = req.user;
+
+      const isHrOrAdmin = role === "hr" || role === "admin" || role === "hrmanager";
+      if (!isHrOrAdmin) {
+        return res.status(403).json({ error: "Only HR or Admin can assign or change clearance approvers" });
+      }
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      if (!resignation.clearance_raised || !Array.isArray(resignation.clearance_steps)) {
+        return res.status(400).json({ error: "Clearance form has not been raised for this resignation" });
+      }
+
+      const steps = [...resignation.clearance_steps];
+      const targetIndex = steps.findIndex(s => s.id === step_id || s.order === Number(step_id));
+      if (targetIndex === -1) {
+        return res.status(404).json({ error: "Clearance step not found in pipeline" });
+      }
+
+      const targetStep = steps[targetIndex];
+      if (targetStep.status === "Cleared") {
+        return res.status(400).json({ error: `Cannot reassign approver for "${targetStep.name}" because it has already been cleared.` });
+      }
+
+      const resigningEmpId = String(resignation.employee_id || "").trim().toLowerCase();
+      if (assigned_emp_id && String(assigned_emp_id).trim().toLowerCase() === resigningEmpId) {
+        return res.status(400).json({ error: "Cannot assign the resigning employee as the clearance approver." });
+      }
+
+      targetStep.assigned_emp_id = assigned_emp_id ? String(assigned_emp_id).trim() : null;
+      targetStep.assigned_emp_name = assigned_emp_name ? String(assigned_emp_name).trim() : null;
+      targetStep.assigned_emp_designation = assigned_emp_designation ? String(assigned_emp_designation).trim() : null;
+
+      const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
+      notifications.push({
+        id: Date.now(),
+        target: "CLEARANCE_PIPELINE",
+        recipient: assigned_emp_id || targetStep.dept_key,
+        type: "APPROVER_ASSIGNED",
+        title: `Clearance Approver Assigned: ${targetStep.name}`,
+        message: `HR ${name || "HR"} assigned ${assigned_emp_name || assigned_emp_id} to authorize clearance for ${targetStep.name}.`,
+        created_at: new Date().toISOString()
+      });
+
+      const updatedSteps = JSON.parse(JSON.stringify(steps));
+      resignation.changed("clearance_steps", true);
+      resignation.changed("notifications", true);
+
+      await Resignation.update({
+        clearance_steps: updatedSteps,
+        notifications
+      }, { where: { id: resignation.id } });
+
+      const refreshed = await Resignation.findByPk(id);
+      const populated = await populateAndAutoAdvanceResignations([refreshed]);
+
+      return res.json({
+        success: true,
+        message: `Clearance approver for ${targetStep.name} updated to ${assigned_emp_name || assigned_emp_id} successfully!`,
+        data: populated[0]
+      });
+    } catch (err) {
+      console.error("Reassign step approver error:", err.message);
+      return res.status(500).json({ error: "Failed to reassign clearance approver" });
     }
   },
 

@@ -224,6 +224,12 @@ module.exports = (sequelize) => {
         defaultValue: 0,
       },
 
+      mediclaim_deduction: {
+        type: DataTypes.DECIMAL(12, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
+
       statutory_pt: {
         type: DataTypes.DECIMAL(12, 2),
         allowNull: false,

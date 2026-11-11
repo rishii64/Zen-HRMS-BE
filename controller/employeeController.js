@@ -60,62 +60,102 @@ const EmployeeController = {
         order: [["id", "ASC"]]
       });
 
-      const employees = users.map((user) => ({
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        work_email: user.work_email || user.email,
-        personal_email: user.personal_email || "",
-        employee_code: user.employee_id,
-        job_role: (user.role && user.role.toLowerCase() === "employees") ? "employee" : user.role,
-        status: user.status || (user.is_active ? "Active" : "Inactive"),
-        current_salary: user.current_salary,
-        dept: user.dept,
-        designation: user.designation,
-        department_id: user.department_id,
-        designation_id: user.designation_id,
-        grade_id: user.grade_id,
-        reporting_manager_id: user.reporting_manager_id,
-        grade: user.gradeProfile ? {
-          id: user.gradeProfile.id,
-          grade_code: user.gradeProfile.grade_code,
-          grade_name: user.gradeProfile.grade_name,
-          rank_level: user.gradeProfile.rank_level,
-          min_salary: user.gradeProfile.min_salary,
-          max_salary: user.gradeProfile.max_salary,
-          notice_period_days: user.gradeProfile.notice_period_days,
-        } : null,
-        is_hod: (user.designationProfile && user.designationProfile.is_hod_role) || (user.gradeProfile && user.gradeProfile.rank_level >= 6),
-        group_name: user.group_name || "TATA Company",
-        company_name: user.company_name || "TATA Steel",
-        work_location: user.work_location || "Kolkata",
-        joining_date: user.joining_date,
-        reporting_manager: user.reporting_manager,
-        phone_no: user.phone_no,
-        kpi: user.kpi,
-        tabs_enabled: user.tabs_enabled,
-        enabled_tabs: user.enabled_tabs,
-        document_status: user.document_status || "Not Uploaded",
-        pan_no: user.pan_no || "",
-        aadhaar_no: user.aadhaar_no || "",
-        driving_license: user.driving_license || "",
-        doc_resume: user.doc_resume,
-        doc_id: user.doc_id,
-        doc_cert: user.doc_cert,
-        doc_pan: user.doc_pan,
-        doc_aadhaar: user.doc_aadhaar,
-        doc_payslips: user.doc_payslips,
-        doc_exp_cert: user.doc_exp_cert,
-        doc_last_company: user.doc_last_company,
-        uploaded_documents: user.uploaded_documents,
-        last_company_details: user.last_company_details,
-        profile_photo: user.profile_photo,
-        profile_pic: user.profile_photo,
-        employment_type: user.employment_type || "Permanent",
-        salary_structure: user.salary_structure,
-        facilities: user.facilities ? (typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities) : null,
-        esi_threshold: user.esi_threshold
-      }));
+      const userByCode = {};
+      const userByName = {};
+      users.forEach((u) => {
+        if (u.employee_id) userByCode[u.employee_id.toLowerCase().trim()] = u;
+        if (u.name) userByName[u.name.toLowerCase().trim()] = u;
+      });
+
+      const employees = users.map((user) => {
+        let mgrId = user.reporting_manager_id || null;
+        let mgrName = user.reporting_manager || null;
+
+        if (mgrId) {
+          const m = userByCode[mgrId.toLowerCase().trim()];
+          if (m) mgrName = m.name;
+        } else if (mgrName && mgrName !== "N/A" && mgrName !== "None") {
+          const m = userByName[mgrName.toLowerCase().trim()];
+          if (m) mgrId = m.employee_id;
+        }
+
+        let hodId = user.hod_id || null;
+        let hodName = user.hod_name || null;
+
+        if (hodId) {
+          const m = userByCode[hodId.toLowerCase().trim()];
+          if (m) hodName = m.name;
+        } else if (hodName && hodName !== "N/A" && hodName !== "None") {
+          const m = userByName[hodName.toLowerCase().trim()];
+          if (m) hodId = m.employee_id;
+        }
+
+        if (!hodId && user.departmentProfile?.hod_employee_id) {
+          hodId = user.departmentProfile.hod_employee_id;
+          hodName = user.departmentProfile.hod_name || userByCode[hodId.toLowerCase().trim()]?.name || "Department Head";
+        }
+
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          work_email: user.work_email || user.email,
+          personal_email: user.personal_email || "",
+          employee_id: user.employee_id,
+          employee_code: user.employee_id,
+          job_role: (user.role && user.role.toLowerCase() === "employees") ? "employee" : user.role,
+          role: (user.role && user.role.toLowerCase() === "employees") ? "employee" : user.role,
+          status: user.status || (user.is_active ? "Active" : "Inactive"),
+          current_salary: user.current_salary,
+          dept: user.dept,
+          designation: user.designation,
+          department_id: user.department_id,
+          designation_id: user.designation_id,
+          grade_id: user.grade_id,
+          reporting_manager_id: mgrId,
+          grade: user.gradeProfile ? {
+            id: user.gradeProfile.id,
+            grade_code: user.gradeProfile.grade_code,
+            grade_name: user.gradeProfile.grade_name,
+            rank_level: user.gradeProfile.rank_level,
+            min_salary: user.gradeProfile.min_salary,
+            max_salary: user.gradeProfile.max_salary,
+            notice_period_days: user.gradeProfile.notice_period_days,
+          } : null,
+          is_hod: (user.designationProfile && user.designationProfile.is_hod_role) || (user.gradeProfile && user.gradeProfile.rank_level >= 6),
+          group_name: user.group_name || "TATA Company",
+          company_name: user.company_name || "TATA Steel",
+          work_location: user.work_location || "Kolkata",
+          joining_date: user.joining_date,
+          reporting_manager: mgrName || "N/A",
+          hod_id: hodId,
+          hod_name: hodName || "N/A",
+          phone_no: user.phone_no,
+          kpi: user.kpi,
+          tabs_enabled: user.tabs_enabled,
+          enabled_tabs: user.enabled_tabs,
+          document_status: user.document_status || "Not Uploaded",
+          pan_no: user.pan_no || "",
+          aadhaar_no: user.aadhaar_no || "",
+          driving_license: user.driving_license || "",
+          doc_resume: user.doc_resume,
+          doc_id: user.doc_id,
+          doc_cert: user.doc_cert,
+          doc_pan: user.doc_pan,
+          doc_aadhaar: user.doc_aadhaar,
+          doc_payslips: user.doc_payslips,
+          doc_exp_cert: user.doc_exp_cert,
+          doc_last_company: user.doc_last_company,
+          uploaded_documents: user.uploaded_documents,
+          last_company_details: user.last_company_details,
+          profile_photo: user.profile_photo,
+          profile_pic: user.profile_photo,
+          employment_type: user.employment_type || "Permanent",
+          salary_structure: user.salary_structure,
+          facilities: user.facilities ? (typeof user.facilities === "string" ? JSON.parse(user.facilities) : user.facilities) : null,
+          esi_threshold: user.esi_threshold
+        };
+      });
 
       return res.json({ success: true, data: employees });
     } catch (err) {
@@ -202,7 +242,90 @@ const EmployeeController = {
       let resolvedDeptId = req.body.department_id ? parseInt(req.body.department_id, 10) : null;
       let resolvedDesigId = req.body.designation_id ? parseInt(req.body.designation_id, 10) : null;
       let resolvedGradeId = req.body.grade_id ? parseInt(req.body.grade_id, 10) : null;
-      const reportingManagerId = req.body.reporting_manager_id || null;
+      let reportingManagerId = req.body.reporting_manager_id ? String(req.body.reporting_manager_id).trim() : null;
+      let reportingManagerName = reporting_manager ? reporting_manager.trim() : null;
+      let hodId = req.body.hod_id ? String(req.body.hod_id).trim() : null;
+      let hodName = req.body.hod_name ? String(req.body.hod_name).trim() : null;
+
+      // Circular check: cannot report to self
+      if (reportingManagerId && reportingManagerId.toLowerCase() === normalizedEmployeeCode.toLowerCase()) {
+        return res.status(400).json({ error: "An employee cannot report to themselves." });
+      }
+
+      // If reportingManagerId is provided, resolve the manager's name
+      if (reportingManagerId) {
+        try {
+          const mgrUser = await User.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              reportingManagerId.toLowerCase()
+            )
+          });
+          if (mgrUser) {
+            reportingManagerName = mgrUser.name;
+          } else {
+            const mgrEmp = await Employee.findOne({
+              where: sequelize.where(
+                sequelize.fn("LOWER", sequelize.col("employee_id")),
+                reportingManagerId.toLowerCase()
+              )
+            });
+            if (mgrEmp) {
+              reportingManagerName = `${mgrEmp.first_name || ""} ${mgrEmp.last_name || ""}`.trim() || mgrEmp.name;
+            }
+          }
+        } catch (_) {}
+      } else if (reportingManagerName && reportingManagerName !== "N/A" && reportingManagerName !== "None") {
+        // If only reporting_manager name is provided, look up their employee_id
+        try {
+          const mgrUser = await User.findOne({
+            where: {
+              name: { [Op.iLike]: reportingManagerName.trim() }
+            }
+          });
+          if (mgrUser) {
+            reportingManagerId = mgrUser.employee_id;
+            reportingManagerName = mgrUser.name;
+          }
+        } catch (_) {}
+      }
+
+      // If hodId is provided, resolve the HOD's name
+      if (hodId) {
+        try {
+          const hUser = await User.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              hodId.toLowerCase()
+            )
+          });
+          if (hUser) {
+            hodName = hUser.name;
+          } else {
+            const hEmp = await Employee.findOne({
+              where: sequelize.where(
+                sequelize.fn("LOWER", sequelize.col("employee_id")),
+                hodId.toLowerCase()
+              )
+            });
+            if (hEmp) {
+              hodName = `${hEmp.first_name || ""} ${hEmp.last_name || ""}`.trim() || hEmp.name;
+            }
+          }
+        } catch (_) {}
+      } else if (hodName && hodName !== "N/A" && hodName !== "None") {
+        try {
+          const hUser = await User.findOne({
+            where: {
+              name: { [Op.iLike]: hodName.trim() }
+            }
+          });
+          if (hUser) {
+            hodId = hUser.employee_id;
+            hodName = hUser.name;
+          }
+        } catch (_) {}
+      }
 
       if (!resolvedDeptId && dept) {
         try {
@@ -215,6 +338,16 @@ const EmployeeController = {
             }
           });
           if (matchedD) resolvedDeptId = matchedD.id;
+        } catch (_) {}
+      }
+
+      if (!hodId && resolvedDeptId) {
+        try {
+          const dRec = await Department.findByPk(resolvedDeptId);
+          if (dRec && dRec.hod_employee_id) {
+            hodId = dRec.hod_employee_id;
+            hodName = dRec.hod_name || hodName || "Department Head";
+          }
         } catch (_) {}
       }
 
@@ -275,17 +408,15 @@ const EmployeeController = {
         company_name: company_name ? company_name.trim() : "TATA Steel",
         work_location: work_location ? work_location.trim() : "Kolkata",
         joining_date: joining_date || null,
-        reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+        reporting_manager: reportingManagerName ? reportingManagerName.trim() : "N/A",
         department_id: resolvedDeptId,
         designation_id: resolvedDesigId,
         grade_id: resolvedGradeId,
         reporting_manager_id: reportingManagerId,
+        hod_id: hodId || null,
+        hod_name: hodName ? hodName.trim() : "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
-            department_id: resolvedUpdateDeptId,
-            designation_id: resolvedUpdateDesigId,
-            grade_id: resolvedUpdateGradeId,
-            reporting_manager_id: userUpdateFields.reporting_manager_id !== undefined ? userUpdateFields.reporting_manager_id : emp.reporting_manager_id,
         employment_type: req.body.employment_type || "Permanent",
         tabs_enabled: tabs_enabled === true || tabs_enabled === "true",
         enabled_tabs: tabsString || "1,2,3,4",
@@ -318,11 +449,13 @@ const EmployeeController = {
           work_location: work_location ? work_location.trim() : "Kolkata",
           current_salary: current_salary ? parseFloat(current_salary) : null,
           joining_date: joining_date || null,
-          reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
-        department_id: resolvedDeptId,
-        designation_id: resolvedDesigId,
-        grade_id: resolvedGradeId,
-        reporting_manager_id: reportingManagerId,
+          reporting_manager: reportingManagerName ? reportingManagerName.trim() : "N/A",
+          department_id: resolvedDeptId,
+          designation_id: resolvedDesigId,
+          grade_id: resolvedGradeId,
+          reporting_manager_id: reportingManagerId,
+        hod_id: hodId || null,
+        hod_name: hodName ? hodName.trim() : "N/A",
           phone_no: phone_no ? phone_no.trim() : null,
           kpi: kpi ? kpi.trim() : null,
           employment_type: req.body.employment_type || "Permanent",
@@ -430,6 +563,146 @@ const EmployeeController = {
       const rawUpdateJobRole = job_role ? job_role.toLowerCase().trim() : "employee";
       const resolvedUpdateJobRole = rawUpdateJobRole === "employees" ? "employee" : rawUpdateJobRole;
 
+      let reportingManagerId = req.body.reporting_manager_id !== undefined
+        ? (req.body.reporting_manager_id ? String(req.body.reporting_manager_id).trim() : null)
+        : (user.reporting_manager_id || null);
+      let reportingManagerName = reporting_manager !== undefined
+        ? (reporting_manager ? reporting_manager.trim() : null)
+        : (user.reporting_manager || null);
+
+      // Circular check: cannot report to self
+      if (reportingManagerId && reportingManagerId.toLowerCase() === employee_code.trim().toLowerCase()) {
+        return res.status(400).json({ error: "An employee cannot report to themselves." });
+      }
+
+      // If reportingManagerId is provided/changed, resolve manager name
+      if (reportingManagerId) {
+        try {
+          const mgrUser = await User.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              reportingManagerId.toLowerCase()
+            )
+          });
+          if (mgrUser) {
+            reportingManagerName = mgrUser.name;
+          } else {
+            const mgrEmp = await Employee.findOne({
+              where: sequelize.where(
+                sequelize.fn("LOWER", sequelize.col("employee_id")),
+                reportingManagerId.toLowerCase()
+              )
+            });
+            if (mgrEmp) {
+              reportingManagerName = `${mgrEmp.first_name || ""} ${mgrEmp.last_name || ""}`.trim() || mgrEmp.name;
+            }
+          }
+        } catch (_) {}
+      } else if (reportingManagerName && reportingManagerName !== "N/A" && reportingManagerName !== "None") {
+        try {
+          const mgrUser = await User.findOne({
+            where: {
+              name: { [Op.iLike]: reportingManagerName.trim() }
+            }
+          });
+          if (mgrUser) {
+            reportingManagerId = mgrUser.employee_id;
+            reportingManagerName = mgrUser.name;
+          }
+        } catch (_) {}
+      }
+
+      // Auto-resolve Department, Designation, and Grade IDs on update
+      let resolvedUpdateDeptId = req.body.department_id !== undefined ? (req.body.department_id ? parseInt(req.body.department_id, 10) : null) : user.department_id;
+      let resolvedUpdateDesigId = req.body.designation_id !== undefined ? (req.body.designation_id ? parseInt(req.body.designation_id, 10) : null) : user.designation_id;
+      let resolvedUpdateGradeId = req.body.grade_id !== undefined ? (req.body.grade_id ? parseInt(req.body.grade_id, 10) : null) : user.grade_id;
+
+      if (!resolvedUpdateDeptId && dept) {
+        try {
+          const matchedD = await Department.findOne({
+            where: {
+              [Op.or]: [
+                { dept_name: { [Op.iLike]: dept.trim() } },
+                { dept_code: { [Op.iLike]: dept.trim() } }
+              ]
+            }
+          });
+          if (matchedD) resolvedUpdateDeptId = matchedD.id;
+        } catch (_) {}
+      }
+
+      if (!resolvedUpdateDesigId && designation) {
+        try {
+          const matchedDes = await Designation.findOne({
+            where: {
+              [Op.or]: [
+                { title: { [Op.iLike]: designation.trim() } },
+                { code: { [Op.iLike]: designation.trim() } }
+              ]
+            }
+          });
+          if (matchedDes) {
+            resolvedUpdateDesigId = matchedDes.id;
+            if (!resolvedUpdateGradeId) resolvedUpdateGradeId = matchedDes.grade_id;
+          }
+        } catch (_) {}
+      }
+
+      // Auto-resolve Department Head / HOD ID & Name
+      let hodId = req.body.hod_id !== undefined
+        ? (req.body.hod_id ? String(req.body.hod_id).trim() : null)
+        : (user.hod_id || null);
+      let hodName = req.body.hod_name !== undefined
+        ? (req.body.hod_name ? req.body.hod_name.trim() : null)
+        : (user.hod_name || null);
+
+      if (hodId) {
+        try {
+          const hodUser = await User.findOne({
+            where: sequelize.where(
+              sequelize.fn("LOWER", sequelize.col("employee_id")),
+              hodId.toLowerCase()
+            )
+          });
+          if (hodUser) {
+            hodName = hodUser.name;
+          } else {
+            const hodEmp = await Employee.findOne({
+              where: sequelize.where(
+                sequelize.fn("LOWER", sequelize.col("employee_id")),
+                hodId.toLowerCase()
+              )
+            });
+            if (hodEmp) {
+              hodName = `${hodEmp.first_name || ""} ${hodEmp.last_name || ""}`.trim() || hodEmp.name;
+            }
+          }
+        } catch (_) {}
+      } else if (hodName && hodName !== "N/A" && hodName !== "None") {
+        try {
+          const hodUser = await User.findOne({
+            where: {
+              name: { [Op.iLike]: hodName.trim() }
+            }
+          });
+          if (hodUser) {
+            hodId = hodUser.employee_id;
+            hodName = hodUser.name;
+          }
+        } catch (_) {}
+      }
+
+      // If still no hodId, check resolvedUpdateDeptId fallback
+      if (!hodId && resolvedUpdateDeptId) {
+        try {
+          const dRec = await Department.findByPk(resolvedUpdateDeptId);
+          if (dRec && dRec.hod_employee_id) {
+            hodId = dRec.hod_employee_id;
+            hodName = dRec.hod_name || hodName || "Department Head";
+          }
+        } catch (_) {}
+      }
+
       const userUpdateFields = {
         name: name.trim(),
         ...(primaryEmail ? { email: primaryEmail, work_email: primaryEmail } : {}),
@@ -442,11 +715,17 @@ const EmployeeController = {
         current_salary: current_salary ? parseFloat(current_salary) : null,
         dept: dept ? dept.trim() : null,
         designation: designation ? designation.trim() : null,
+        department_id: resolvedUpdateDeptId,
+        designation_id: resolvedUpdateDesigId,
+        grade_id: resolvedUpdateGradeId,
         ...(req.body.group_name !== undefined ? { group_name: req.body.group_name ? req.body.group_name.trim() : null } : {}),
         ...(req.body.company_name !== undefined ? { company_name: req.body.company_name ? req.body.company_name.trim() : null } : {}),
         ...(req.body.work_location !== undefined ? { work_location: req.body.work_location ? req.body.work_location.trim() : null } : {}),
         joining_date: joining_date || null,
-        reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+        reporting_manager: reportingManagerName || "N/A",
+        reporting_manager_id: reportingManagerId || null,
+        hod_id: hodId || null,
+        hod_name: hodName || "N/A",
         phone_no: phone_no ? phone_no.trim() : null,
         kpi: kpi ? kpi.trim() : null,
         ...(req.body.employment_type !== undefined ? { employment_type: req.body.employment_type } : {}),
@@ -517,48 +796,6 @@ const EmployeeController = {
         }
 
         const adj = existingStructure?.adjustments || {};
-        // Auto-resolve Department, Designation, and Grade IDs on update
-      let resolvedUpdateDeptId = req.body.department_id !== undefined ? (req.body.department_id ? parseInt(req.body.department_id, 10) : null) : user.department_id;
-      let resolvedUpdateDesigId = req.body.designation_id !== undefined ? (req.body.designation_id ? parseInt(req.body.designation_id, 10) : null) : user.designation_id;
-      let resolvedUpdateGradeId = req.body.grade_id !== undefined ? (req.body.grade_id ? parseInt(req.body.grade_id, 10) : null) : user.grade_id;
-
-      if (!resolvedUpdateDeptId && dept) {
-        try {
-          const matchedD = await Department.findOne({
-            where: {
-              [Op.or]: [
-                { dept_name: { [Op.iLike]: dept.trim() } },
-                { dept_code: { [Op.iLike]: dept.trim() } }
-              ]
-            }
-          });
-          if (matchedD) resolvedUpdateDeptId = matchedD.id;
-        } catch (_) {}
-      }
-
-      if (!resolvedUpdateDesigId && designation) {
-        try {
-          const matchedDes = await Designation.findOne({
-            where: {
-              [Op.or]: [
-                { title: { [Op.iLike]: designation.trim() } },
-                { code: { [Op.iLike]: designation.trim() } }
-              ]
-            }
-          });
-          if (matchedDes) {
-            resolvedUpdateDesigId = matchedDes.id;
-            if (!resolvedUpdateGradeId) resolvedUpdateGradeId = matchedDes.grade_id;
-          }
-        } catch (_) {}
-      }
-
-      userUpdateFields.department_id = resolvedUpdateDeptId;
-      userUpdateFields.designation_id = resolvedUpdateDesigId;
-      userUpdateFields.grade_id = resolvedUpdateGradeId;
-      if (req.body.reporting_manager_id !== undefined) {
-        userUpdateFields.reporting_manager_id = req.body.reporting_manager_id || null;
-      }
 
       const isPerm = userUpdateFields.employment_type
           ? String(userUpdateFields.employment_type).toLowerCase() === "permanent"
@@ -661,7 +898,13 @@ const EmployeeController = {
           work_location: userUpdateFields.work_location !== undefined ? userUpdateFields.work_location : (user.work_location || "Kolkata"),
           current_salary: current_salary ? parseFloat(current_salary) : null,
           joining_date: joining_date || null,
-          reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+          reporting_manager: reportingManagerName || "N/A",
+          reporting_manager_id: reportingManagerId || null,
+          hod_id: hodId || null,
+          hod_name: hodName || "N/A",
+          department_id: resolvedUpdateDeptId,
+          designation_id: resolvedUpdateDesigId,
+          grade_id: resolvedUpdateGradeId,
           phone_no: phone_no ? phone_no.trim() : null,
           kpi: kpi ? kpi.trim() : null,
           employment_type: userUpdateFields.employment_type !== undefined ? userUpdateFields.employment_type : (user.employment_type || "Permanent"),
@@ -694,7 +937,13 @@ const EmployeeController = {
             ...(userUpdateFields.work_location !== undefined ? { work_location: userUpdateFields.work_location } : {}),
             current_salary: current_salary ? parseFloat(current_salary) : null,
             joining_date: joining_date || null,
-            reporting_manager: reporting_manager ? reporting_manager.trim() : "N/A",
+            reporting_manager: reportingManagerName || "N/A",
+            reporting_manager_id: reportingManagerId || null,
+            hod_id: hodId || null,
+            hod_name: hodName || "N/A",
+            department_id: resolvedUpdateDeptId,
+            designation_id: resolvedUpdateDesigId,
+            grade_id: resolvedUpdateGradeId,
             phone_no: phone_no ? phone_no.trim() : null,
             kpi: kpi ? kpi.trim() : null,
           };
@@ -922,6 +1171,65 @@ const EmployeeController = {
         ? (resignation?.hr_confirmed_lwd || resignation?.last_working_date || user.updated_at || user.updatedAt)
         : null;
 
+      // Check employee record in employees table as well for latest fields
+      let empRecord = null;
+      try {
+        empRecord = await Employee.findOne({
+          where: sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("employee_id")),
+            targetCode.toLowerCase().trim()
+          )
+        });
+      } catch (_) {}
+
+      let resolvedMgrId = user.reporting_manager_id || empRecord?.reporting_manager_id || null;
+      let resolvedMgrName = user.reporting_manager || empRecord?.reporting_manager || null;
+
+      if (resolvedMgrId) {
+        try {
+          const mgr = await User.findOne({
+            where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), resolvedMgrId.toLowerCase().trim())
+          });
+          if (mgr) resolvedMgrName = mgr.name;
+        } catch (_) {}
+      } else if (resolvedMgrName && resolvedMgrName !== "N/A" && resolvedMgrName !== "None") {
+        try {
+          const mgr = await User.findOne({
+            where: { name: { [Op.iLike]: resolvedMgrName.trim() } }
+          });
+          if (mgr) resolvedMgrId = mgr.employee_id;
+        } catch (_) {}
+      }
+
+      let resolvedHodId = user.hod_id || empRecord?.hod_id || null;
+      let resolvedHodName = user.hod_name || empRecord?.hod_name || null;
+
+      if (!resolvedHodId && (user.department_id || empRecord?.department_id)) {
+        try {
+          const deptRec = await Department.findByPk(user.department_id || empRecord?.department_id);
+          if (deptRec && deptRec.hod_employee_id) {
+            resolvedHodId = deptRec.hod_employee_id;
+            resolvedHodName = deptRec.hod_name || resolvedHodName || "Department Head";
+          }
+        } catch (_) {}
+      }
+
+      if (resolvedHodId) {
+        try {
+          const hod = await User.findOne({
+            where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), resolvedHodId.toLowerCase().trim())
+          });
+          if (hod) resolvedHodName = hod.name;
+        } catch (_) {}
+      } else if (resolvedHodName && resolvedHodName !== "N/A" && resolvedHodName !== "None") {
+        try {
+          const hod = await User.findOne({
+            where: { name: { [Op.iLike]: resolvedHodName.trim() } }
+          });
+          if (hod) resolvedHodId = hod.employee_id;
+        } catch (_) {}
+      }
+
       const employee = {
         id: user.id,
         name: user.name,
@@ -940,9 +1248,11 @@ const EmployeeController = {
         department_id: user.department_id,
         designation_id: user.designation_id,
         grade_id: user.grade_id,
-        reporting_manager_id: user.reporting_manager_id,
+        reporting_manager_id: resolvedMgrId,
         joining_date: user.joining_date,
-        reporting_manager: user.reporting_manager,
+        reporting_manager: resolvedMgrName || "N/A",
+        hod_id: resolvedHodId,
+        hod_name: resolvedHodName || "N/A",
         phone_no: user.phone_no,
         phone: user.phone_no,
         kpi: user.kpi,
@@ -1139,33 +1449,51 @@ const EmployeeController = {
         }
       }
 
+      // Sanitize DOB (must be a valid date or null; empty string causes Postgres invalid input syntax for type date: "")
+      let sanitizedDob = null;
+      if (dob && typeof dob === "string" && dob.trim() && dob !== "null" && dob !== "undefined") {
+        const d = new Date(dob.trim());
+        if (!isNaN(d.getTime())) {
+          sanitizedDob = dob.trim().split("T")[0];
+        }
+      } else if (user.dob) {
+        if (typeof user.dob === "string" && user.dob.trim() && user.dob !== "null" && user.dob !== "undefined") {
+          const d = new Date(user.dob.trim());
+          if (!isNaN(d.getTime())) {
+            sanitizedDob = user.dob.trim().split("T")[0];
+          }
+        } else if (user.dob instanceof Date && !isNaN(user.dob.getTime())) {
+          sanitizedDob = user.dob.toISOString().split("T")[0];
+        }
+      }
+
       const updateData = {
-        dob: dob || user.dob,
+        dob: sanitizedDob,
         gender: gender || user.gender,
         nationality: nationality || user.nationality,
-        address_current: address_current || user.address_current,
-        address_permanent: address_permanent || user.address_permanent,
-        emergency_contact_name: emergency_contact_name || user.emergency_contact_name,
-        emergency_contact_phone: emergency_contact_phone || user.emergency_contact_phone,
+        address_current: address_current !== undefined ? address_current : user.address_current,
+        address_permanent: address_permanent !== undefined ? address_permanent : user.address_permanent,
+        emergency_contact_name: emergency_contact_name !== undefined ? emergency_contact_name : user.emergency_contact_name,
+        emergency_contact_phone: emergency_contact_phone !== undefined ? emergency_contact_phone : user.emergency_contact_phone,
         education: education || user.education,
         family_details: family_details || user.family_details,
         certifications: certifications || user.certifications,
         passport_visa: passport_visa || user.passport_visa,
         bank_details: bank_details || user.bank_details,
-        blood_group: blood_group || user.blood_group,
-        religion: religion || user.religion,
-        total_experience: total_experience || previous_experience || user.total_experience,
-        previous_experience: previous_experience !== undefined ? previous_experience : (user.previous_experience || user.total_experience),
+        blood_group: blood_group !== undefined ? blood_group : user.blood_group,
+        religion: religion !== undefined ? religion : user.religion,
+        total_experience: total_experience !== undefined ? total_experience : user.total_experience,
+        previous_experience: previous_experience !== undefined ? previous_experience : user.previous_experience,
         marital_status: marital_status || user.marital_status
       };
 
-      if (pan_no !== undefined) updateData.pan_no = pan_no ? pan_no.toUpperCase().trim() : null;
-      if (aadhaar_no !== undefined) updateData.aadhaar_no = aadhaar_no ? aadhaar_no.trim() : null;
-      if (driving_license !== undefined) updateData.driving_license = driving_license ? driving_license.trim() : null;
+      if (pan_no !== undefined) updateData.pan_no = (pan_no && pan_no.trim() && pan_no !== "null" && pan_no !== "undefined") ? pan_no.toUpperCase().trim() : null;
+      if (aadhaar_no !== undefined) updateData.aadhaar_no = (aadhaar_no && aadhaar_no.trim() && aadhaar_no !== "null" && aadhaar_no !== "undefined") ? aadhaar_no.trim() : null;
+      if (driving_license !== undefined) updateData.driving_license = (driving_license && driving_license.trim() && driving_license !== "null" && driving_license !== "undefined") ? driving_license.trim() : null;
       if (last_company_details !== undefined) updateData.last_company_details = last_company_details;
 
       if (personal_email !== undefined) {
-        updateData.personal_email = personal_email ? personal_email.toLowerCase().trim() : null;
+        updateData.personal_email = (personal_email && personal_email.trim() && personal_email !== "null" && personal_email !== "undefined") ? personal_email.toLowerCase().trim() : null;
       }
 
       if (doc_resume) updateData.doc_resume = doc_resume;
@@ -1191,7 +1519,58 @@ const EmployeeController = {
       }
       updateData.document_status = currentStatus;
 
-      await user.update(updateData);
+      try {
+        await user.update(updateData);
+      } catch (updateErr) {
+        console.warn("First user.update failed, auto-migrating missing columns and retrying:", updateErr.message);
+        try {
+          await sequelize.query(`
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS dob DATE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR(20);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS nationality VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS address_current TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS address_permanent TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact_name VARCHAR(100);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact_phone VARCHAR(20);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS education TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS family_details TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_resume VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_id VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_cert VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS blood_group VARCHAR(10);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS religion VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS total_experience TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS previous_experience TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS marital_status VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS document_status VARCHAR(50) DEFAULT 'Not Uploaded';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS certifications TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS passport_visa TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_details TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS salary_structure TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS personal_email VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS work_email VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS pan_no VARCHAR(20);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS aadhaar_no VARCHAR(20);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS driving_license VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_pan VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_aadhaar VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_payslips TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_exp_cert TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_last_company TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS uploaded_documents TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS last_company_details TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+            ALTER TABLE users ALTER COLUMN previous_experience TYPE TEXT;
+            ALTER TABLE users ALTER COLUMN total_experience TYPE TEXT;
+          `);
+          await user.update(updateData);
+        } catch (retryErr) {
+          throw retryErr;
+        }
+      }
 
       // Sync to employees table
       try {
@@ -1202,7 +1581,55 @@ const EmployeeController = {
           )
         });
         if (emp) {
-          await emp.update(updateData);
+          try {
+            await emp.update(updateData);
+          } catch (empErr) {
+            try {
+              await sequelize.query(`
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS dob DATE;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS gender VARCHAR(20);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS nationality VARCHAR(50);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS address_current TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS address_permanent TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact_name VARCHAR(100);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact_phone VARCHAR(20);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS education TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS family_details TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_resume VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_id VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_cert VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS profile_photo VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS blood_group VARCHAR(10);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS religion VARCHAR(50);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS total_experience TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS previous_experience TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS marital_status VARCHAR(50);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS document_status VARCHAR(50) DEFAULT 'Not Uploaded';
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS certifications TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS passport_visa TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_details TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS salary_structure TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS personal_email VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_email VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS pan_no VARCHAR(20);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS aadhaar_no VARCHAR(20);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS driving_license VARCHAR(50);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_pan VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_aadhaar VARCHAR(255);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_payslips TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_exp_cert TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_last_company TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS uploaded_documents TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_company_details TEXT;
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
+                ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+                ALTER TABLE employees ALTER COLUMN previous_experience TYPE TEXT;
+                ALTER TABLE employees ALTER COLUMN total_experience TYPE TEXT;
+              `);
+              await emp.update(updateData);
+            } catch (_) {}
+          }
         }
       } catch (err) {
         console.error("Failed to sync detailed profile update to employees table:", err.message);
@@ -1221,6 +1648,10 @@ const EmployeeController = {
           personal_email: user.personal_email,
           designation: user.designation,
           dept: user.dept,
+          reporting_manager: user.reporting_manager,
+          reporting_manager_id: user.reporting_manager_id,
+          hod_id: user.hod_id,
+          hod_name: user.hod_name,
           profile_photo: user.profile_photo,
           document_status: user.document_status,
           pan_no: user.pan_no,
@@ -1236,8 +1667,8 @@ const EmployeeController = {
         }
       });
     } catch (err) {
-      console.error("Update detailed profile error:", err.message);
-      return res.status(500).json({ success: false, error: "Failed to update detailed profile" });
+      console.error("Update detailed profile error:", err);
+      return res.status(500).json({ success: false, error: err.message || "Failed to update detailed profile" });
     }
   },
 

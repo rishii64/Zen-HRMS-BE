@@ -7,6 +7,7 @@ const {
   LeavePolicy,
   sequelize
 } = require("../config/db");
+const { sendRealtimeNotification } = require("../socket");
 const { Op } = require("sequelize");
 const { getISTDateStr } = require("../utils/timezone");
 
@@ -415,6 +416,21 @@ const LeaveController = {
         status: "Pending",
       });
 
+      // Notify reporting manager & HR via real-time socket
+      const reportingMgr = (user && user.reporting_manager) || (emp && emp.reporting_manager);
+      sendRealtimeNotification({
+        recipient_id: reportingMgr || "ALL",
+        recipient_role: reportingMgr ? undefined : "hod",
+        title: "New Leave Application",
+        message: `${empName || employee_id} applied for ${resolveLeaveName(leaveCode)} (${start_date} to ${end_date}, ${computedDays} day(s)). Reason: ${reason || "Personal"}.`,
+        type: "leave",
+        category: "Leaves",
+        link: "/hr/leaves",
+        priority: "normal",
+        source_module: "leaves",
+        created_by: empName || employee_id,
+      }).catch((e) => console.warn("Socket leave apply notification error:", e.message));
+
       return res.status(201).json({
         success: true,
         message: "Leave application submitted successfully!",
@@ -497,6 +513,19 @@ const LeaveController = {
       } catch (syncErr) {
         console.warn("Leave balance sync warning on status update:", syncErr.message);
       }
+
+      // Notify employee of approval/rejection decision via real-time socket
+      sendRealtimeNotification({
+        recipient_id: leave.employee_id,
+        title: `Leave Request ${status} ${status === "Approved" ? "✅" : "❌"}`,
+        message: `Your ${leave.leave_type} application (${leave.start_date} to ${leave.end_date}) has been ${status.toLowerCase()} by ${name || "Management"}.${comments ? ' Remarks: ' + comments : ''}`,
+        type: "leave",
+        category: "Leaves",
+        link: "/leave",
+        priority: status === "Approved" ? "normal" : "high",
+        source_module: "leaves",
+        created_by: name || "Approver",
+      }).catch((e) => console.warn("Socket leave status notification error:", e.message));
 
       return res.json({
         success: true,

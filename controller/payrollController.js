@@ -1732,7 +1732,9 @@ const PayrollController = {
           try { fp = typeof payroll.fixed_pay === "string" ? JSON.parse(payroll.fixed_pay) : (payroll.fixed_pay || {}); } catch {}
           basePay = parseFloat(fp.total_fixed || fp.basic) || curSal;
           grossPay = parseFloat(payroll.gross_pay) || basePay;
-          statutoryDeductions = parseFloat(payroll.total_deductions) || 0;
+          let statObj = {};
+          try { statObj = typeof payroll.statutory_deductions === "string" ? JSON.parse(payroll.statutory_deductions) : (payroll.statutory_deductions || {}); } catch {}
+          statutoryDeductions = parseFloat(statObj.total_statutory) || Math.max(0, (parseFloat(payroll.total_deductions) || 0) - (parseFloat(payroll.lop_deduction) || 0));
         } else if (ss) {
           const earn = ss.earnings || {};
           const ded = ss.deductions || {};

@@ -75,11 +75,21 @@ const OvertimeController = {
         where.payout_status = payout_status;
       }
 
-      // Filter by month (attendance_date LIKE 'YYYY-MM%')
+      // Filter by month (attendance_date BETWEEN YYYY-MM-01 and YYYY-MM-LastDay)
       if (month && month !== "All") {
-        where.attendance_date = {
-          [Op.startsWith]: month,
-        };
+        const parts = String(month).trim().split("-");
+        if (parts.length === 2) {
+          const y = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10);
+          if (!isNaN(y) && !isNaN(m)) {
+            const lastDay = new Date(y, m, 0).getDate();
+            const startMonthStr = `${parts[0]}-${String(m).padStart(2, "0")}-01`;
+            const endMonthStr = `${parts[0]}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+            where.attendance_date = {
+              [Op.between]: [startMonthStr, endMonthStr],
+            };
+          }
+        }
       }
 
       // Filter by specific employee
@@ -171,6 +181,10 @@ const OvertimeController = {
             ],
           }
         : { employee_id: userEmpId };
+
+      if (where.attendance_date) {
+        statsQueryWhere.attendance_date = where.attendance_date;
+      }
 
       const allStatsRecords = await OvertimeTicket.findAll({
         where: statsQueryWhere,
@@ -276,17 +290,36 @@ const OvertimeController = {
 
       const hourlyRate = calculateHourlyRate(emp.current_salary);
 
-      // Determine date range (default: last 45 days)
-      const now = new Date();
-      const pastDate = new Date();
-      pastDate.setDate(now.getDate() - 45);
-      const pastDateStr = pastDate.toISOString().split("T")[0];
+      // Determine date range:
+      // If month parameter provided (e.g. "2026-11"), scope to that calendar month.
+      // Otherwise, default to the active cycle (last 30 days up to today).
+      const { month } = req.query;
+      let dateCondition = {};
 
-      // Fetch attendance records with check_out
+      if (month && month !== "All") {
+        const [yearStr, monthStr] = month.split("-");
+        const y = parseInt(yearStr, 10);
+        const m = parseInt(monthStr, 10);
+        if (!isNaN(y) && !isNaN(m)) {
+          const lastDay = new Date(y, m, 0).getDate();
+          const startMonthStr = `${month}-01`;
+          const endMonthStr = `${month}-${String(lastDay).padStart(2, "0")}`;
+          dateCondition = { [Op.between]: [startMonthStr, endMonthStr] };
+        }
+      } else {
+        const now = new Date();
+        const past30 = new Date();
+        past30.setDate(now.getDate() - 30);
+        const startStr = past30.toISOString().split("T")[0];
+        const todayStr = now.toISOString().split("T")[0];
+        dateCondition = { [Op.between]: [startStr, todayStr] };
+      }
+
+      // Fetch attendance records with check_out within active date range
       const attendanceLogs = await Attendance.findAll({
         where: {
           employee_id: targetEmpId,
-          date: { [Op.gte]: pastDateStr },
+          date: dateCondition,
           check_out: { [Op.ne]: null },
         },
         order: [["date", "DESC"]],
@@ -296,7 +329,7 @@ const OvertimeController = {
       const schedules = await Schedule.findAll({
         where: {
           employee_id: targetEmpId,
-          date: { [Op.gte]: pastDateStr },
+          date: dateCondition,
         },
       });
 
@@ -309,7 +342,7 @@ const OvertimeController = {
       const existingTickets = await OvertimeTicket.findAll({
         where: {
           employee_id: targetEmpId,
-          attendance_date: { [Op.gte]: pastDateStr },
+          attendance_date: dateCondition,
         },
       });
 
@@ -334,30 +367,34 @@ const OvertimeController = {
 
         const checkOutMins = parseTimeToMinutes(checkOutTime);
         const shiftEndMins = parseTimeToMinutes(shiftEnd);
+        const totalWorkHours = parseFloat(att.work_hours) || 0.0;
+
+        // Glitch & Anomaly Filter:
+        // Ignore corrupted rollover records (work hours > 14.0 or <= 0.5)
+        if (totalWorkHours > 14.0 || totalWorkHours < 0.5) return;
 
         let otMinutes = 0;
-        let isBeyondShift = false;
 
-        // Condition 1: Check-out time is strictly beyond shift end time
-        if (checkOutMins !== null && shiftEndMins !== null && checkOutMins > shiftEndMins) {
-          otMinutes = checkOutMins - shiftEndMins;
-          isBeyondShift = true;
-        }
-
-        // Condition 2: Total work hours exceed standard 8.0 / 8.5 hours
-        const totalWorkHours = parseFloat(att.work_hours) || 0.0;
-        if (totalWorkHours > 8.5 && otMinutes === 0) {
-          otMinutes = Math.round((totalWorkHours - 8.0) * 60);
-          isBeyondShift = true;
+        // Genuine Overtime Requirement:
+        // 1. Employee must have punched out after shift end
+        // 2. Employee must have worked at least the standard 8.0 hours
+        if (checkOutMins !== null && shiftEndMins !== null && checkOutMins > shiftEndMins && totalWorkHours >= 8.0) {
+          const otByClock = checkOutMins - shiftEndMins;
+          const otByWorkHours = Math.round((totalWorkHours - 8.0) * 60);
+          // Overtime is bounded by both clock and total work hours
+          otMinutes = Math.min(otByClock, otByWorkHours);
         }
 
         // Only register if overtime is at least 15 minutes (0.25 hrs threshold)
-        if (isBeyondShift && otMinutes >= 15) {
+        // and cap daily overtime at 6.0 hours (360 minutes max)
+        if (otMinutes >= 15) {
+          otMinutes = Math.min(otMinutes, 360);
           const otHours = parseFloat((otMinutes / 60).toFixed(2));
           const otMultiplier = 1.5; // standard 1.5x rate
           const estimatedPayout = parseFloat((otHours * hourlyRate * otMultiplier).toFixed(2));
 
           const existingTicket = ticketMap[attDate];
+          const hasTicket = Boolean(existingTicket);
 
           detectedShifts.push({
             attendance_id: att.id,
@@ -378,8 +415,9 @@ const OvertimeController = {
             hourly_rate: hourlyRate,
             ot_multiplier: otMultiplier,
             estimated_payout: estimatedPayout,
-            reporting_manager: emp.reporting_manager || "Sid Nayak",
-            has_ticket: Boolean(existingTicket),
+            reporting_manager: emp.reporting_manager || "Management",
+            has_ticket: hasTicket,
+            is_already_ticketed: hasTicket, // for frontend compatibility
             ticket_id: existingTicket?.id || null,
             ticket_number: existingTicket?.ticket_number || null,
             ticket_status: existingTicket?.status || null,
@@ -472,7 +510,7 @@ const OvertimeController = {
       const ticket_number = `OT-${currentYear}-${String(count + 1).padStart(4, "0")}`;
 
       // Resolve Reporting Manager
-      const reportingManagerName = emp.reporting_manager || "Sid Nayak";
+      const reportingManagerName = emp.reporting_manager || "Management";
 
       // Attempt to find reporting manager's employee_id
       let reportingManagerId = null;
@@ -662,11 +700,27 @@ const OvertimeController = {
       }
 
       // Query all Approved OT tickets for that month
+      let dateCondition;
+      const parts = String(month_year).trim().split("-");
+      if (parts.length === 2) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        if (!isNaN(y) && !isNaN(m)) {
+          const lastDay = new Date(y, m, 0).getDate();
+          const startMonthStr = `${parts[0]}-${String(m).padStart(2, "0")}-01`;
+          const endMonthStr = `${parts[0]}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+          dateCondition = { [Op.between]: [startMonthStr, endMonthStr] };
+        }
+      }
+      if (!dateCondition) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid month format. Expected YYYY-MM" });
+      }
+
       const where = {
         status: "Approved",
-        attendance_date: {
-          [Op.startsWith]: month_year,
-        },
+        attendance_date: dateCondition,
       };
 
       if (employee_id) {

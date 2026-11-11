@@ -1096,34 +1096,48 @@ const KpiController = {
       let detectedMgrId = manager_id || null;
       let detectedMgrName = manager_name || null;
       if (!detectedMgrId && detectedMgrName !== "None") {
-        const repMgrName = emp?.reporting_manager || user?.reporting_manager;
-        if (repMgrName && repMgrName !== "N/A" && repMgrName !== "None") {
+        const repMgrId = emp?.reporting_manager_id || user?.reporting_manager_id;
+        if (repMgrId && repMgrId.toLowerCase() !== employee_id.toLowerCase()) {
           const mgrUser = await User.findOne({
-            where: {
-              [Op.or]: [
-                { name: { [Op.iLike]: `%${repMgrName.trim()}%` } },
-                { employee_id: { [Op.iLike]: repMgrName.trim() } },
-              ],
-              is_active: true,
-            },
+            where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), repMgrId.toLowerCase().trim()),
           });
-          if (mgrUser && mgrUser.employee_id !== employee_id) {
+          if (mgrUser) {
             detectedMgrId = mgrUser.employee_id;
             detectedMgrName = mgrUser.name;
           } else {
-            detectedMgrName = repMgrName;
+            detectedMgrId = repMgrId;
+            detectedMgrName = emp?.reporting_manager || user?.reporting_manager || repMgrId;
           }
         } else {
-          const deptMgr = await User.findOne({
-            where: {
-              role: "manager",
-              dept: department,
-              is_active: true,
-            },
-          });
-          if (deptMgr && deptMgr.employee_id !== employee_id) {
-            detectedMgrId = deptMgr.employee_id;
-            detectedMgrName = deptMgr.name;
+          const repMgrName = emp?.reporting_manager || user?.reporting_manager;
+          if (repMgrName && repMgrName !== "N/A" && repMgrName !== "None") {
+            const mgrUser = await User.findOne({
+              where: {
+                [Op.or]: [
+                  { name: { [Op.iLike]: `%${repMgrName.trim()}%` } },
+                  { employee_id: { [Op.iLike]: repMgrName.trim() } },
+                ],
+                is_active: true,
+              },
+            });
+            if (mgrUser && mgrUser.employee_id !== employee_id) {
+              detectedMgrId = mgrUser.employee_id;
+              detectedMgrName = mgrUser.name;
+            } else {
+              detectedMgrName = repMgrName;
+            }
+          } else {
+            const deptMgr = await User.findOne({
+              where: {
+                role: "manager",
+                dept: department,
+                is_active: true,
+              },
+            });
+            if (deptMgr && deptMgr.employee_id !== employee_id) {
+              detectedMgrId = deptMgr.employee_id;
+              detectedMgrName = deptMgr.name;
+            }
           }
         }
       }
@@ -1132,16 +1146,42 @@ const KpiController = {
       let detectedHodId = hod_id || null;
       let detectedHodName = hod_name || null;
       if (!detectedHodId) {
-        const hodUser = await User.findOne({
-          where: {
-            role: "hod",
-            dept: department,
-            is_active: true,
-          },
-        });
-        if (hodUser && hodUser.employee_id !== employee_id) {
-          detectedHodId = hodUser.employee_id;
-          detectedHodName = hodUser.name;
+        const assignedHodId = emp?.hod_id || user?.hod_id;
+        if (assignedHodId && assignedHodId.toLowerCase() !== employee_id.toLowerCase()) {
+          const hodUser = await User.findOne({
+            where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), assignedHodId.toLowerCase().trim()),
+          });
+          if (hodUser) {
+            detectedHodId = hodUser.employee_id;
+            detectedHodName = hodUser.name;
+          } else {
+            detectedHodId = assignedHodId;
+            detectedHodName = emp?.hod_name || user?.hod_name || assignedHodId;
+          }
+        } else {
+          // Check Department profile fallback
+          if (emp?.department_id || user?.department_id) {
+            try {
+              const dRec = await Department.findByPk(emp?.department_id || user?.department_id);
+              if (dRec && dRec.hod_employee_id) {
+                detectedHodId = dRec.hod_employee_id;
+                detectedHodName = dRec.hod_name || "Department Head";
+              }
+            } catch (_) {}
+          }
+          if (!detectedHodId) {
+            const hodUser = await User.findOne({
+              where: {
+                role: "hod",
+                dept: department,
+                is_active: true,
+              },
+            });
+            if (hodUser && hodUser.employee_id !== employee_id) {
+              detectedHodId = hodUser.employee_id;
+              detectedHodName = hodUser.name;
+            }
+          }
         }
       }
 

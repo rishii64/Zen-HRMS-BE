@@ -475,7 +475,7 @@ const OrganizationController = {
           order: [["id", "ASC"]]
         }),
         User.findAll({
-          attributes: ["employee_id", "name", "email", "profile_photo", "role", "designation", "dept", "reporting_manager_id"]
+          attributes: ["employee_id", "name", "email", "profile_photo", "role", "designation", "dept", "reporting_manager_id", "hod_id", "hod_name"]
         }),
         Department.findAll({
           order: [["dept_name", "ASC"]]
@@ -499,6 +499,8 @@ const OrganizationController = {
         const gradeCode = emp.gradeProfile?.grade_code || `L${rankLevel}`;
         const desigTitle = emp.designationProfile?.title || emp.designation || user.designation || "Staff";
         const isHod = !!(
+          emp.hod_id === emp.employee_id ||
+          user.hod_id === emp.employee_id ||
           emp.departmentProfile?.hod_employee_id === emp.employee_id ||
           emp.designationProfile?.is_hod_role ||
           /hod|head|general manager|chro|ceo|coo|cto|cfo|vp/i.test(desigTitle)
@@ -521,6 +523,8 @@ const OrganizationController = {
           grade_name: emp.gradeProfile?.grade_name || `Level ${rankLevel}`,
           reporting_manager_id: emp.reporting_manager_id || user.reporting_manager_id || null,
           reporting_manager_name: null,
+          hod_id: emp.hod_id || user.hod_id || emp.departmentProfile?.hod_employee_id || null,
+          hod_name: emp.hod_name || user.hod_name || emp.departmentProfile?.hod_name || null,
           work_location: emp.work_location || "Kolkata",
           employment_type: emp.employment_type || "Permanent",
           status: emp.status || "Active",
@@ -540,10 +544,23 @@ const OrganizationController = {
         }
       });
 
-      // Map managers' names
+      // Map managers' names and resolve legacy records where ID was omitted but name was provided
       Object.values(nodeMap).forEach((n) => {
-        if (n.reporting_manager_id && nodeMap[n.reporting_manager_id]) {
-          n.reporting_manager_name = nodeMap[n.reporting_manager_id].name;
+        let mgrId = n.reporting_manager_id;
+        if (!mgrId) {
+          const empRec = employees.find((e) => (e.employee_id || "").toLowerCase() === (n.employee_id || "").toLowerCase());
+          const userRec = userMap[n.employee_id];
+          const mName = (empRec?.reporting_manager || userRec?.reporting_manager || "").trim().toLowerCase();
+          if (mName && mName !== "n/a" && mName !== "none") {
+            const matchedNode = Object.values(nodeMap).find((node) => node.name && node.name.toLowerCase().trim() === mName);
+            if (matchedNode) {
+              mgrId = matchedNode.employee_id;
+              n.reporting_manager_id = mgrId;
+            }
+          }
+        }
+        if (mgrId && nodeMap[mgrId]) {
+          n.reporting_manager_name = nodeMap[mgrId].name;
         }
       });
 
@@ -789,11 +806,11 @@ const OrganizationController = {
       // Update Employee and User
       await Employee.update(
         { reporting_manager_id: new_reporting_manager_id || null, reporting_manager: managerName || "N/A" },
-        { where: { employee_id } }
+        { where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()) }
       );
       await User.update(
-        { reporting_manager_id: new_reporting_manager_id || null },
-        { where: { employee_id } }
+        { reporting_manager_id: new_reporting_manager_id || null, reporting_manager: managerName || "N/A" },
+        { where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()) }
       );
 
       return res.json({
@@ -806,6 +823,52 @@ const OrganizationController = {
     } catch (err) {
       console.error("Reassign reporting manager error:", err);
       return res.status(500).json({ error: "Failed to update reporting manager: " + err.message });
+    }
+  },
+
+  // PUT /api/auth/organization/hod
+  // Reassign an employee's Department Head / HOD
+  async reassignHod(req, res) {
+    try {
+      const { employee_id, new_hod_id } = req.body;
+      if (!employee_id) {
+        return res.status(400).json({ error: "employee_id is required" });
+      }
+
+      const emp = await Employee.findOne({ where: { employee_id } });
+      if (!emp) {
+        return res.status(404).json({ error: `Employee ${employee_id} not found.` });
+      }
+
+      let hodName = null;
+      if (new_hod_id) {
+        const hEmp = await Employee.findOne({ where: { employee_id: new_hod_id } });
+        const hUser = !hEmp ? await User.findOne({ where: { employee_id: new_hod_id } }) : null;
+        if (!hEmp && !hUser) {
+          return res.status(404).json({ error: `Target HOD ${new_hod_id} not found.` });
+        }
+        hodName = hEmp ? `${hEmp.first_name || ""} ${hEmp.last_name || ""}`.trim() || hEmp.name : hUser.name;
+      }
+
+      await Employee.update(
+        { hod_id: new_hod_id || null, hod_name: hodName || "N/A" },
+        { where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()) }
+      );
+      await User.update(
+        { hod_id: new_hod_id || null, hod_name: hodName || "N/A" },
+        { where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()) }
+      );
+
+      return res.json({
+        success: true,
+        message: `Department Head for ${employee_id} updated to ${hodName || "None"}.`,
+        employee_id,
+        new_hod_id: new_hod_id || null,
+        new_hod_name: hodName || "None"
+      });
+    } catch (err) {
+      console.error("Reassign HOD error:", err);
+      return res.status(500).json({ error: "Failed to update HOD: " + err.message });
     }
   },
 

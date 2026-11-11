@@ -5,6 +5,7 @@ const {
   User,
   sequelize,
 } = require("../config/db");
+const { sendRealtimeNotification } = require("../socket");
 const { Op } = require("sequelize");
 const path = require("path");
 
@@ -173,6 +174,21 @@ const claimController = {
       const created = await ExpenseClaim.findByPk(claim.id, {
         include: [{ model: ExpenseClaimItem, as: "items" }],
       });
+
+      if (!is_draft) {
+        sendRealtimeNotification({
+          recipient_id: managerId || "ALL",
+          recipient_role: managerId ? undefined : "manager",
+          title: "New Expense/Travel Claim Submitted",
+          message: `${empName || employee_id} submitted claim ${claimNumber} for ₹${Number(total).toLocaleString("en-IN")}. Purpose: ${purpose || title}.`,
+          type: "claim",
+          category: "Approvals",
+          link: "/claims",
+          priority: "normal",
+          source_module: "claims",
+          created_by: empName || employee_id,
+        }).catch((e) => console.warn("Socket claim submit notify error:", e.message));
+      }
 
       return res.status(201).json({
         success: true,
@@ -390,6 +406,21 @@ const claimController = {
       const updated = await ExpenseClaim.findByPk(claim.id, {
         include: [{ model: ExpenseClaimItem, as: "items" }],
       });
+
+      if (submit_now) {
+        sendRealtimeNotification({
+          recipient_id: claim.manager_id || "ALL",
+          recipient_role: claim.manager_id ? undefined : "manager",
+          title: "New Expense/Travel Claim Submitted",
+          message: `${claim.employee_name} submitted claim ${claim.claim_number} for ₹${Number(total).toLocaleString("en-IN")}. Purpose: ${claim.purpose || claim.title}.`,
+          type: "claim",
+          category: "Approvals",
+          link: "/claims",
+          priority: "normal",
+          source_module: "claims",
+          created_by: claim.employee_name,
+        }).catch((e) => console.warn("Socket claim submit notify error:", e.message));
+      }
 
       return res.json({
         success: true,
@@ -620,6 +651,33 @@ const claimController = {
         include: [{ model: ExpenseClaimItem, as: "items" }],
       });
 
+      // Notify employee of manager decision
+      sendRealtimeNotification({
+        recipient_id: claim.employee_id,
+        title: `Claim ${decision === "APPROVED" ? "Approved by Manager" : "Rejected by Manager"}`,
+        message: `Your claim ${claim.claim_number} (₹${claim.total_amount}) has been ${decision.toLowerCase()} by manager ${req.user?.name || "Manager"}.${comments ? ' Remarks: ' + comments : ''}`,
+        type: "claim",
+        category: "Approvals",
+        link: "/claims",
+        priority: decision === "APPROVED" ? "normal" : "high",
+        source_module: "claims",
+        created_by: req.user?.name || "Manager",
+      }).catch((e) => console.warn("Socket manager claim notify error:", e.message));
+
+      if (decision === "APPROVED") {
+        // Notify Accounts/Finance
+        sendRealtimeNotification({
+          recipient_role: "accounts",
+          title: `Claim Awaiting Finance Audit: ${claim.claim_number}`,
+          message: `Manager approved claim ${claim.claim_number} for ₹${claim.approved_amount} (${claim.employee_name}). Awaiting finance audit.`,
+          type: "claim",
+          category: "Approvals",
+          link: "/claims",
+          priority: "normal",
+          source_module: "claims",
+        }).catch((e) => console.warn("Socket finance claim notify error:", e.message));
+      }
+
       return res.json({
         success: true,
         message: decision === "APPROVED"
@@ -801,6 +859,21 @@ const claimController = {
         include: [{ model: ExpenseClaimItem, as: "items" }],
       });
 
+      // Notify employee of finance decision
+      sendRealtimeNotification({
+        recipient_id: claim.employee_id,
+        title: `Claim ${decision === "APPROVED" ? "Sanctioned by Finance" : "Rejected by Finance"}`,
+        message: decision === "APPROVED"
+          ? `Your claim ${claim.claim_number} has been audited & sanctioned by Finance for ₹${Number(finalApprovedSum).toLocaleString("en-IN")}. Pending disbursement.`
+          : `Your claim ${claim.claim_number} was rejected by Finance. Note: ${comments || "Not sanctioned"}.`,
+        type: "claim",
+        category: "Approvals",
+        link: "/claims",
+        priority: decision === "APPROVED" ? "normal" : "high",
+        source_module: "claims",
+        created_by: reviewerName,
+      }).catch((e) => console.warn("Socket finance claim notify error:", e.message));
+
       return res.json({
         success: true,
         message: decision === "APPROVED"
@@ -854,6 +927,19 @@ const claimController = {
         disbursed_by_name: disburserName,
         payment_notes: payment_notes || `Reimbursement settled via ${payment_mode}`,
       });
+
+      // Notify employee of payment disbursement
+      sendRealtimeNotification({
+        recipient_id: claim.employee_id,
+        title: "Expense Reimbursement Disbursed! 💰",
+        message: `Claim ${claim.claim_number} of ₹${Number(claim.approved_amount).toLocaleString("en-IN")} has been disbursed via ${payment_mode} (Ref: ${payment_reference || "Processed"}).`,
+        type: "claim",
+        category: "Approvals",
+        link: "/claims",
+        priority: "high",
+        source_module: "claims",
+        created_by: disburserName,
+      }).catch((e) => console.warn("Socket disburse claim notify error:", e.message));
 
       return res.json({
         success: true,
