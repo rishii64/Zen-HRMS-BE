@@ -387,6 +387,56 @@ module.exports = (sequelize) => {
         allowNull: true,
         defaultValue: [],
       },
+      kt_tasks: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+        defaultValue: [],
+      },
+      kt_status: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        defaultValue: "NOT_STARTED", // "NOT_STARTED", "IN_PROGRESS", "SUBMITTED", "REVISION_REQUESTED", "RECIPIENT_ACCEPTED", "VERIFIED"
+      },
+      kt_recipient_feedback: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      kt_recipient_rating: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      kt_recipient_signed_at: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      kt_recipient_signed_by_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      kt_recipient_signed_by_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
+      kt_manager_verification_notes: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      kt_manager_verified_at: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      kt_manager_verified_by_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      kt_manager_verified_by_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
+      kt_certificate_number: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
     },
     {
       tableName: "resignations",

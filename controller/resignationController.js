@@ -98,6 +98,69 @@ const DEFAULT_EXIT_QUESTIONS = [
   }
 ];
 
+const DEFAULT_KT_TASKS = [
+  {
+    id: "kt_codebase_arch",
+    title: "System Architecture, Services & Source Repositories",
+    category: "Codebase & Systems",
+    priority: "High",
+    description: "Detailed code walkthrough of all active repositories, architectural diagrams, branching strategies, and CI/CD deployment pipelines.",
+    deliverable_url: "",
+    due_date: "",
+    status: "Pending", // Pending, In Progress, Completed, Blocked
+    notes: "",
+    completed_at: null
+  },
+  {
+    id: "kt_creds_access",
+    title: "Credentials, Secrets & Cloud Access Handoff",
+    category: "Credentials & Access",
+    priority: "Critical",
+    description: "Transfer and rotation of staging/production credentials, cloud infrastructure keys (AWS/GCP), API secret keys, database logins, and third-party SaaS accounts.",
+    deliverable_url: "",
+    due_date: "",
+    status: "Pending",
+    notes: "",
+    completed_at: null
+  },
+  {
+    id: "kt_runbooks_sop",
+    title: "Operational Runbooks, Crons & SOP Documentation",
+    category: "Documentation & SOPs",
+    priority: "High",
+    description: "Documentation of operational procedures, scheduled batch jobs/crons, database backup/recovery routines, and incident troubleshooting runbooks.",
+    deliverable_url: "",
+    due_date: "",
+    status: "Pending",
+    notes: "",
+    completed_at: null
+  },
+  {
+    id: "kt_client_vendor",
+    title: "Key Stakeholders, Clients & Vendor Contacts Handover",
+    category: "Client / Vendor Relations",
+    priority: "Medium",
+    description: "Formal introduction and handoff of external client contacts, vendor accounts, support escalation points, and internal partner communication channels.",
+    deliverable_url: "",
+    due_date: "",
+    status: "Pending",
+    notes: "",
+    completed_at: null
+  },
+  {
+    id: "kt_inflight_backlog",
+    title: "In-Flight Sprint Tasks, Backlog Items & Known Defects",
+    category: "In-Flight Tasks & Deliverables",
+    priority: "High",
+    description: "Status breakdown of active sprint commitments, open pull requests, backlog priority items, pending bug fixes, and critical edge cases.",
+    deliverable_url: "",
+    due_date: "",
+    status: "Pending",
+    notes: "",
+    completed_at: null
+  }
+];
+
 const DEFAULT_CLEARANCE_STEPS = [
   {
     id: "dept",
@@ -2025,6 +2088,19 @@ const ResignationController = {
         }
       }
 
+      // 1.5 KT HANDOVER VERIFICATION CHECK:
+      // If clearing Department Clearance (step.id === 'dept' or dept_key === 'Department'),
+      // Knowledge Transfer must be signed off by the recipient and verified before Department Clearance can be granted!
+      const isDeptStep = targetStep.id === "dept" || (targetStep.dept_key && targetStep.dept_key.toLowerCase() === "department");
+      if (isDeptStep) {
+        const isKtVerified = resignation.kt_status === "VERIFIED" || resignation.handover_status === "CONFIRMED_BY_ASSIGNEE";
+        if (!isKtVerified) {
+          return res.status(400).json({
+            error: `Department Clearance blocked: Knowledge Transfer (KT) tasks must be completed, signed off by recipient (${resignation.handover_person_name || "Assignee"}), and verified before Department Clearance can be granted.`
+          });
+        }
+      }
+
       // 2. DEPARTMENT PERMISSION CHECK: Only the designated officer from that specific department can give clearance!
       // HR cannot give clearance on behalf of another department.
       const isAuthorized = isUserAuthorizedForDeptStep(targetStep, resignation, effectiveUser);
@@ -2044,6 +2120,14 @@ const ResignationController = {
       targetStep.remarks = remarks || "Cleared with no outstanding dues";
       if (Array.isArray(checklist)) {
         targetStep.checklist = checklist;
+      }
+      if (isDeptStep && Array.isArray(targetStep.checklist)) {
+        targetStep.checklist = targetStep.checklist.map(ci => {
+          if (ci.item && ci.item.toLowerCase().includes("handover")) {
+            return { ...ci, done: true };
+          }
+          return ci;
+        });
       }
 
       // Sync legacy boolean columns for backward compatibility
@@ -2424,6 +2508,631 @@ const ResignationController = {
     } catch (err) {
       console.error("Get employee resignation history error:", err.message);
       return res.status(500).json({ error: "Failed to fetch employee resignation history" });
+    }
+  },
+
+  // ==========================================
+  // Knowledge Transfer (KT) Tracking Module Methods
+  // ==========================================
+
+  // GET /api/auth/resignation/:id/kt
+  async getKtDetails(req, res) {
+    try {
+      const { id } = req.params;
+      const { employee_id, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isOwner = (resignation.employee_id || "").trim().toLowerCase() === userClean;
+      const isRecipient = resignation.handover_person_id && (resignation.handover_person_id.trim().toLowerCase() === userClean);
+      const isManager = (resignation.manager_id || "").trim().toLowerCase() === userClean;
+      const isHod = (resignation.hod_id || "").trim().toLowerCase() === userClean;
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || role === "hod" || isLeadershipUser(req.user);
+
+      if (!isOwner && !isRecipient && !isManager && !isHod && !isCorporate) {
+        return res.status(403).json({ error: "Unauthorized to access Knowledge Transfer details" });
+      }
+
+      let tasks = Array.isArray(resignation.kt_tasks) && resignation.kt_tasks.length > 0 ? resignation.kt_tasks : [];
+      if (tasks.length === 0) {
+        tasks = DEFAULT_KT_TASKS.map(t => ({
+          ...t,
+          due_date: resignation.handover_target_date || resignation.last_working_date || ""
+        }));
+      }
+
+      const totalTasks = tasks.length;
+      const completedTasks = tasks.filter(t => t.status === "Completed").length;
+      const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+      return res.json({
+        success: true,
+        data: {
+          resignation_id: resignation.id,
+          employee_id: resignation.employee_id,
+          employee_name: resignation.name,
+          dept: resignation.dept,
+          designation: resignation.designation,
+          handover_person_id: resignation.handover_person_id,
+          handover_person_name: resignation.handover_person_name,
+          target_date: resignation.handover_target_date || resignation.last_working_date,
+          kt_tasks: tasks,
+          total_tasks: totalTasks,
+          completed_tasks: completedTasks,
+          progress_percentage: progressPercentage,
+          kt_status: resignation.kt_status || "NOT_STARTED",
+          kt_recipient_feedback: resignation.kt_recipient_feedback,
+          kt_recipient_rating: resignation.kt_recipient_rating,
+          kt_recipient_signed_at: resignation.kt_recipient_signed_at,
+          kt_recipient_signed_by_id: resignation.kt_recipient_signed_by_id,
+          kt_recipient_signed_by_name: resignation.kt_recipient_signed_by_name,
+          kt_manager_verification_notes: resignation.kt_manager_verification_notes,
+          kt_manager_verified_at: resignation.kt_manager_verified_at,
+          kt_manager_verified_by_id: resignation.kt_manager_verified_by_id,
+          kt_manager_verified_by_name: resignation.kt_manager_verified_by_name,
+          kt_certificate_number: resignation.kt_certificate_number,
+          can_manage_tasks: isOwner || isCorporate || isManager,
+          can_recipient_signoff: isRecipient || isCorporate,
+          can_manager_verify: isManager || isHod || isCorporate
+        }
+      });
+    } catch (err) {
+      console.error("Get KT details error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch KT details" });
+    }
+  },
+
+  // POST /api/auth/resignation/:id/kt/tasks
+  async updateKtTasks(req, res) {
+    try {
+      const { id } = req.params;
+      const { tasks, reset_to_default } = req.body;
+      const { employee_id, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isOwner = (resignation.employee_id || "").trim().toLowerCase() === userClean;
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || isLeadershipUser(req.user);
+
+      if (!isOwner && !isCorporate) {
+        return res.status(403).json({ error: "Only the resigning employee or supervisor can manage KT tasks" });
+      }
+
+      if (resignation.kt_status === "VERIFIED") {
+        return res.status(400).json({ error: "Knowledge Transfer has already been verified and locked" });
+      }
+
+      let updatedTasks = [];
+      if (reset_to_default) {
+        updatedTasks = DEFAULT_KT_TASKS.map(t => ({
+          ...t,
+          due_date: resignation.handover_target_date || resignation.last_working_date || ""
+        }));
+      } else if (Array.isArray(tasks)) {
+        updatedTasks = tasks.map((t, idx) => ({
+          id: t.id || `kt_${Date.now()}_${idx}`,
+          title: (t.title || "Untitled Task").trim(),
+          category: (t.category || "General").trim(),
+          priority: t.priority || "Medium",
+          description: (t.description || "").trim(),
+          deliverable_url: (t.deliverable_url || "").trim(),
+          due_date: t.due_date || resignation.handover_target_date || "",
+          status: t.status || "Pending",
+          notes: (t.notes || "").trim(),
+          completed_at: t.status === "Completed" ? (t.completed_at || new Date().toISOString()) : null
+        }));
+      }
+
+      let newStatus = resignation.kt_status;
+      if (newStatus === "NOT_STARTED" || !newStatus) {
+        newStatus = "IN_PROGRESS";
+      }
+
+      resignation.changed("kt_tasks", true);
+      await resignation.update({
+        kt_tasks: updatedTasks,
+        kt_status: newStatus
+      });
+
+      return res.json({
+        success: true,
+        message: "KT task checklist updated successfully!",
+        data: {
+          kt_tasks: updatedTasks,
+          kt_status: newStatus
+        }
+      });
+    } catch (err) {
+      console.error("Update KT tasks error:", err.message);
+      return res.status(500).json({ error: "Failed to update KT tasks" });
+    }
+  },
+
+  // POST /api/auth/resignation/:id/kt/tasks/add
+  async addKtTask(req, res) {
+    try {
+      const { id } = req.params;
+      const { title, category, priority, description, deliverable_url, due_date, notes } = req.body;
+      const { employee_id, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isOwner = (resignation.employee_id || "").trim().toLowerCase() === userClean;
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || isLeadershipUser(req.user);
+
+      if (!isOwner && !isCorporate) {
+        return res.status(403).json({ error: "Only the resigning employee or supervisor can add KT tasks" });
+      }
+
+      if (!title || !title.trim()) {
+        return res.status(400).json({ error: "Task title is required" });
+      }
+
+      let currentTasks = Array.isArray(resignation.kt_tasks) && resignation.kt_tasks.length > 0
+        ? [...resignation.kt_tasks]
+        : DEFAULT_KT_TASKS.map(t => ({ ...t, due_date: resignation.handover_target_date || resignation.last_working_date || "" }));
+
+      const newTask = {
+        id: `kt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        title: title.trim(),
+        category: (category || "General").trim(),
+        priority: priority || "Medium",
+        description: (description || "").trim(),
+        deliverable_url: (deliverable_url || "").trim(),
+        due_date: due_date || resignation.handover_target_date || "",
+        status: "Pending",
+        notes: (notes || "").trim(),
+        completed_at: null
+      };
+
+      currentTasks.push(newTask);
+
+      resignation.changed("kt_tasks", true);
+      await resignation.update({
+        kt_tasks: currentTasks,
+        kt_status: resignation.kt_status === "NOT_STARTED" ? "IN_PROGRESS" : resignation.kt_status
+      });
+
+      return res.json({
+        success: true,
+        message: `KT task "${newTask.title}" added successfully!`,
+        data: newTask,
+        kt_tasks: currentTasks
+      });
+    } catch (err) {
+      console.error("Add KT task error:", err.message);
+      return res.status(500).json({ error: "Failed to add KT task" });
+    }
+  },
+
+  // PATCH /api/auth/resignation/:id/kt/tasks/:taskId
+  async updateSingleKtTask(req, res) {
+    try {
+      const { id, taskId } = req.params;
+      const { status, deliverable_url, notes, due_date, title, category, priority } = req.body;
+      const { employee_id, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isOwner = (resignation.employee_id || "").trim().toLowerCase() === userClean;
+      const isRecipient = resignation.handover_person_id && (resignation.handover_person_id.trim().toLowerCase() === userClean);
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || isLeadershipUser(req.user);
+
+      if (!isOwner && !isRecipient && !isCorporate) {
+        return res.status(403).json({ error: "Unauthorized to update this KT task" });
+      }
+
+      let currentTasks = Array.isArray(resignation.kt_tasks) && resignation.kt_tasks.length > 0
+        ? [...resignation.kt_tasks]
+        : DEFAULT_KT_TASKS.map(t => ({ ...t, due_date: resignation.handover_target_date || resignation.last_working_date || "" }));
+
+      const taskIndex = currentTasks.findIndex(t => String(t.id) === String(taskId));
+      if (taskIndex === -1) {
+        return res.status(404).json({ error: "KT task not found" });
+      }
+
+      const task = { ...currentTasks[taskIndex] };
+      if (title !== undefined) task.title = title.trim();
+      if (category !== undefined) task.category = category.trim();
+      if (priority !== undefined) task.priority = priority;
+      if (deliverable_url !== undefined) task.deliverable_url = deliverable_url.trim();
+      if (notes !== undefined) task.notes = notes.trim();
+      if (due_date !== undefined) task.due_date = due_date;
+
+      if (status !== undefined) {
+        task.status = status;
+        if (status === "Completed") {
+          task.completed_at = new Date().toISOString();
+        } else {
+          task.completed_at = null;
+        }
+      }
+
+      currentTasks[taskIndex] = task;
+
+      resignation.changed("kt_tasks", true);
+      await resignation.update({
+        kt_tasks: currentTasks
+      });
+
+      return res.json({
+        success: true,
+        message: "KT task updated successfully!",
+        data: task,
+        kt_tasks: currentTasks
+      });
+    } catch (err) {
+      console.error("Update single KT task error:", err.message);
+      return res.status(500).json({ error: "Failed to update KT task" });
+    }
+  },
+
+  // DELETE /api/auth/resignation/:id/kt/tasks/:taskId
+  async deleteKtTask(req, res) {
+    try {
+      const { id, taskId } = req.params;
+      const { employee_id, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isOwner = (resignation.employee_id || "").trim().toLowerCase() === userClean;
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || isLeadershipUser(req.user);
+
+      if (!isOwner && !isCorporate) {
+        return res.status(403).json({ error: "Only the resigning employee or supervisor can delete KT tasks" });
+      }
+
+      if (resignation.kt_status === "VERIFIED") {
+        return res.status(400).json({ error: "Knowledge Transfer is already verified and locked" });
+      }
+
+      let currentTasks = Array.isArray(resignation.kt_tasks) ? [...resignation.kt_tasks] : [];
+      currentTasks = currentTasks.filter(t => String(t.id) !== String(taskId));
+
+      resignation.changed("kt_tasks", true);
+      await resignation.update({ kt_tasks: currentTasks });
+
+      return res.json({
+        success: true,
+        message: "KT task removed",
+        kt_tasks: currentTasks
+      });
+    } catch (err) {
+      console.error("Delete KT task error:", err.message);
+      return res.status(500).json({ error: "Failed to delete KT task" });
+    }
+  },
+
+  // POST /api/auth/resignation/:id/kt/submit
+  async submitKtForSignoff(req, res) {
+    try {
+      const { id } = req.params;
+      const { notes } = req.body;
+      const { employee_id, name, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isOwner = (resignation.employee_id || "").trim().toLowerCase() === userClean;
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin";
+
+      if (!isOwner && !isCorporate) {
+        return res.status(403).json({ error: "Only the resigning employee can submit Knowledge Transfer for sign-off" });
+      }
+
+      let tasks = Array.isArray(resignation.kt_tasks) && resignation.kt_tasks.length > 0
+        ? resignation.kt_tasks
+        : DEFAULT_KT_TASKS.map(t => ({ ...t, due_date: resignation.handover_target_date || resignation.last_working_date || "" }));
+
+      const incomplete = tasks.filter(t => t.status !== "Completed");
+      if (incomplete.length > 0) {
+        return res.status(400).json({
+          error: `Cannot submit for sign-off: ${incomplete.length} KT task(s) are still incomplete (${incomplete.map(i => i.title).join(", ")}). Please complete or update all tasks before formal sign-off.`
+        });
+      }
+
+      const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
+      notifications.push({
+        id: Date.now(),
+        target: "ASSIGNEE",
+        recipient: resignation.handover_person_name || "Handover Recipient",
+        type: "KT_SUBMITTED_FOR_SIGNOFF",
+        title: "Knowledge Transfer Submitted for Your Sign-off",
+        message: `${resignation.name} has completed all ${tasks.length} Knowledge Transfer deliverables and submitted them for your formal verification and sign-off.`,
+        created_at: new Date().toISOString()
+      });
+
+      resignation.changed("kt_tasks", true);
+      resignation.changed("notifications", true);
+
+      await resignation.update({
+        kt_tasks: tasks,
+        kt_status: "SUBMITTED",
+        handover_status: "SUBMITTED_BY_EMPLOYEE",
+        handover_employee_remarks: notes || resignation.handover_employee_remarks || "Knowledge Transfer checklist submitted for recipient review.",
+        handover_employee_completed_at: new Date(),
+        notifications
+      });
+
+      // Send real-time notification to recipient
+      if (resignation.handover_person_id) {
+        sendRealtimeNotification({
+          recipient_id: resignation.handover_person_id,
+          title: "Knowledge Transfer (KT) Ready for Review",
+          message: `${resignation.name} has submitted all KT deliverables. Please review and provide sign-off.`,
+          type: "resignation",
+          category: "Resignation",
+          link: "/resignation",
+          priority: "high",
+          source_module: "resignation",
+          created_by: name || "Resigning Employee"
+        }).catch(e => console.warn("KT submit notify error:", e.message));
+      }
+
+      return res.json({
+        success: true,
+        message: "Knowledge Transfer successfully submitted for recipient sign-off!",
+        data: {
+          kt_status: "SUBMITTED",
+          handover_status: "SUBMITTED_BY_EMPLOYEE"
+        }
+      });
+    } catch (err) {
+      console.error("Submit KT error:", err.message);
+      return res.status(500).json({ error: "Failed to submit Knowledge Transfer" });
+    }
+  },
+
+  // POST /api/auth/resignation/:id/kt/recipient-signoff
+  async recipientKtSignoff(req, res) {
+    try {
+      const { id } = req.params;
+      const { decision, feedback, rating } = req.body;
+      const { employee_id, name, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isRecipient = resignation.handover_person_id && (resignation.handover_person_id.trim().toLowerCase() === userClean);
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || role === "hod";
+
+      if (!isRecipient && !isCorporate) {
+        return res.status(403).json({
+          error: `Only designated handover recipient (${resignation.handover_person_name || "Assignee"}) or HR can submit KT recipient sign-off.`
+        });
+      }
+
+      const isAccepted = decision === "ACCEPT" || decision === "Confirmed";
+      const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
+
+      if (isAccepted) {
+        notifications.push({
+          id: Date.now(),
+          target: "MANAGER",
+          recipient: resignation.manager_name || "Reporting Manager",
+          type: "KT_RECIPIENT_ACCEPTED",
+          title: "KT Signed Off by Recipient - Ready for Manager Verification",
+          message: `${resignation.handover_person_name || name} has reviewed and accepted the Knowledge Transfer from ${resignation.name} (Comprehension Score: ${rating || 5}/5). Pending Manager Handover Verification before clearance.`,
+          created_at: new Date().toISOString()
+        });
+
+        notifications.push({
+          id: Date.now() + 1,
+          target: "EMPLOYEE",
+          recipient: resignation.name,
+          type: "KT_ACCEPTED_BY_RECIPIENT",
+          title: "Knowledge Transfer Accepted by Recipient!",
+          message: `${resignation.handover_person_name || name} has signed off on your Knowledge Transfer handover with score ${rating || 5}/5. Now awaiting Manager verification.`,
+          created_at: new Date().toISOString()
+        });
+
+        resignation.changed("notifications", true);
+        await resignation.update({
+          kt_status: "RECIPIENT_ACCEPTED",
+          kt_recipient_feedback: feedback || "All KT deliverables reviewed and accepted in full.",
+          kt_recipient_rating: Number(rating) || 5,
+          kt_recipient_signed_at: new Date(),
+          kt_recipient_signed_by_id: employee_id,
+          kt_recipient_signed_by_name: name || "Handover Recipient",
+          notifications
+        });
+
+        // Notify manager
+        if (resignation.manager_id) {
+          sendRealtimeNotification({
+            recipient_id: resignation.manager_id,
+            title: "KT Handover Ready for Verification",
+            message: `${resignation.name}'s KT has been accepted by ${resignation.handover_person_name || name}. Please conduct final handover verification.`,
+            type: "resignation",
+            category: "Resignation",
+            link: "/resignation",
+            priority: "normal",
+            source_module: "resignation",
+            created_by: name || "Recipient"
+          }).catch(e => console.warn("KT accepted notify error:", e.message));
+        }
+
+        return res.json({
+          success: true,
+          message: "Knowledge Transfer signed off and accepted! Awaiting Manager Handover Verification.",
+          data: {
+            kt_status: "RECIPIENT_ACCEPTED",
+            kt_recipient_rating: Number(rating) || 5
+          }
+        });
+      } else {
+        // Revision requested
+        notifications.push({
+          id: Date.now(),
+          target: "EMPLOYEE",
+          recipient: resignation.name,
+          type: "KT_REVISION_REQUESTED",
+          title: "KT Revision Requested by Handover Recipient",
+          message: `${resignation.handover_person_name || name} requested revisions on your Knowledge Transfer deliverables. Feedback: ${feedback || "Please clarify documentation and credentials."}`,
+          created_at: new Date().toISOString()
+        });
+
+        resignation.changed("notifications", true);
+        await resignation.update({
+          kt_status: "REVISION_REQUESTED",
+          kt_recipient_feedback: feedback || "Revision requested on deliverables",
+          notifications
+        });
+
+        // Notify employee
+        sendRealtimeNotification({
+          recipient_id: resignation.employee_id,
+          title: "Knowledge Transfer Needs Revision",
+          message: `Recipient ${resignation.handover_person_name || name} requested updates: ${feedback || "Please check deliverables."}`,
+          type: "resignation",
+          category: "Resignation",
+          link: "/resignation",
+          priority: "high",
+          source_module: "resignation",
+          created_by: name || "Recipient"
+        }).catch(e => console.warn("KT revise notify error:", e.message));
+
+        return res.json({
+          success: true,
+          message: "Revision requested. Resigning employee has been notified to make updates.",
+          data: { kt_status: "REVISION_REQUESTED" }
+        });
+      }
+    } catch (err) {
+      console.error("Recipient KT sign-off error:", err.message);
+      return res.status(500).json({ error: "Failed to process recipient sign-off" });
+    }
+  },
+
+  // POST /api/auth/resignation/:id/kt/verify-handover
+  async verifyKtHandover(req, res) {
+    try {
+      const { id } = req.params;
+      const { verification_notes } = req.body;
+      const { employee_id, name, role } = req.user;
+
+      const resignation = await Resignation.findByPk(id);
+      if (!resignation) {
+        return res.status(404).json({ error: "Resignation record not found" });
+      }
+
+      const userClean = (employee_id || "").trim().toLowerCase();
+      const isManager = (resignation.manager_id || "").trim().toLowerCase() === userClean;
+      const isHod = (resignation.hod_id || "").trim().toLowerCase() === userClean;
+      const isCorporate = role === "hr" || role === "hrmanager" || role === "admin" || role === "hod" || isLeadershipUser(req.user);
+
+      if (!isManager && !isHod && !isCorporate) {
+        return res.status(403).json({
+          error: "Only Reporting Manager, Department Head (HOD), or HR can verify Knowledge Transfer handover."
+        });
+      }
+
+      // Update serial clearance step 1 (Department Clearance) checklist if steps exist
+      let updatedSteps = resignation.clearance_steps;
+      if (Array.isArray(updatedSteps)) {
+        updatedSteps = updatedSteps.map(step => {
+          if (step.id === "dept" || (step.dept_key && step.dept_key.toLowerCase() === "department")) {
+            const updatedChecklist = Array.isArray(step.checklist) ? step.checklist.map(ci => {
+              if (ci.item && ci.item.toLowerCase().includes("handover")) {
+                return { ...ci, done: true };
+              }
+              return ci;
+            }) : step.checklist;
+            return { ...step, checklist: updatedChecklist };
+          }
+          return step;
+        });
+        resignation.changed("clearance_steps", true);
+      }
+
+      const notifications = Array.isArray(resignation.notifications) ? [...resignation.notifications] : [];
+      notifications.push({
+        id: Date.now(),
+        target: "EMPLOYEE",
+        recipient: resignation.name,
+        type: "KT_HANDOVER_VERIFIED",
+        title: "Handover Verified",
+        message: `Manager ${name || "Manager"} has officially verified your Knowledge Transfer deliverables. Department clearance is now unlocked!`,
+        created_at: new Date().toISOString()
+      });
+
+      notifications.push({
+        id: Date.now() + 1,
+        target: "HR",
+        recipient: "HR Department",
+        type: "KT_VERIFIED_HR_AUDIT",
+        title: "Handover Verified by Manager",
+        message: `Manager ${name} has verified Knowledge Transfer for ${resignation.name}. Department Clearance can now proceed.`,
+        created_at: new Date().toISOString()
+      });
+
+      resignation.changed("notifications", true);
+
+      await resignation.update({
+        kt_status: "VERIFIED",
+        kt_manager_verification_notes: verification_notes || "Handover deliverables and recipient sign-off verified complete and approved.",
+        kt_manager_verified_at: new Date(),
+        kt_manager_verified_by_id: employee_id,
+        kt_manager_verified_by_name: name || "Reporting Manager",
+        kt_certificate_number: null,
+        handover_status: "CONFIRMED_BY_ASSIGNEE",
+        handover_assignee_confirmed_at: new Date(),
+        handover_assignee_remarks: verification_notes || "Handover verified and confirmed complete",
+        clearance_steps: updatedSteps,
+        notifications
+      });
+
+      // Send real-time notification to employee
+      sendRealtimeNotification({
+        recipient_id: resignation.employee_id,
+        title: "Handover Verified",
+        message: "Your Knowledge Transfer deliverables have been officially verified. Department Clearance is unlocked!",
+        type: "resignation",
+        category: "Resignation",
+        link: "/resignation",
+        priority: "normal",
+        source_module: "resignation",
+        created_by: name || "Manager"
+      }).catch(e => console.warn("KT verify notify error:", e.message));
+
+      return res.json({
+        success: true,
+        message: "Handover verified successfully! Department Clearance is now unlocked.",
+        data: {
+          kt_status: "VERIFIED",
+          kt_manager_verified_at: new Date(),
+          kt_manager_verified_by_name: name || "Reporting Manager"
+        }
+      });
+    } catch (err) {
+      console.error("Verify KT handover error:", err.message);
+      return res.status(500).json({ error: "Failed to verify KT handover" });
     }
   }
 };

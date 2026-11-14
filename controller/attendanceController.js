@@ -285,12 +285,12 @@ const AttendanceController = {
         const [activeEmployees, activeUsers, schedules, holidays] = await Promise.all([
           Employee.findAll({
             where: empWhere,
-            attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date"],
+            attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date", "work_location"],
             raw: true,
           }),
           User.findAll({
             where: empWhere,
-            attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off"],
+            attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off", "work_location"],
             raw: true,
           }),
           Schedule.findAll({
@@ -302,7 +302,7 @@ const AttendanceController = {
             where: {
               date: { [Op.between]: [startDateStr, endDateStr] }
             },
-            attributes: ["id", "name", "date", "dept", "type", "is_working_day"],
+            attributes: ["id", "name", "date", "dept", "type", "is_working_day", "branch_location"],
             raw: true,
           }),
         ]);
@@ -315,6 +315,7 @@ const AttendanceController = {
             employee_id: e.employee_id,
             name: fullName,
             dept: e.dept || "General",
+            work_location: e.work_location || "Kolkata",
             designation: e.designation || "Staff",
             profile_photo: e.profile_photo || null,
             weekly_off: e.weekly_off || "Sunday",
@@ -329,6 +330,7 @@ const AttendanceController = {
               employee_id: u.employee_id,
               name: u.name,
               dept: u.dept || "General",
+            work_location: u.work_location || "Kolkata",
               designation: u.designation || "Staff",
               profile_photo: u.profile_photo || null,
               weekly_off: u.weekly_off || "Sunday",
@@ -343,9 +345,9 @@ const AttendanceController = {
           scheduleMap[key] = s;
         });
 
-        const holidayMap = {};
+        const holidayMap = {}; const holidaysByDate = {};
         holidays.forEach(h => {
-          holidayMap[h.date] = h;
+          holidayMap[h.date] = h; if (!holidaysByDate[h.date]) holidaysByDate[h.date] = []; holidaysByDate[h.date].push(h);
         });
 
         // Enrich existing punched records
@@ -463,16 +465,23 @@ const AttendanceController = {
                   notes = matchedSchedule.notes || (isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)");
                 }
               } else if (
-                holidayMap[dStr] &&
-                !holidayMap[dStr].is_working_day &&
-                holidayMap[dStr].type !== "Working Day" &&
-                (!holidayMap[dStr].dept ||
-                  holidayMap[dStr].dept.toLowerCase() === "all" ||
-                  !emp.dept ||
-                  emp.dept.toLowerCase() === "general" ||
-                  holidayMap[dStr].dept.toLowerCase() === emp.dept.toLowerCase())
+                (holidaysByDate[dStr] || (holidayMap[dStr] ? [holidayMap[dStr]] : [])).some(h => {
+                  if (h.is_working_day || h.type === "Working Day") return false;
+                  const deptOk = !h.dept || h.dept.toLowerCase() === "all" || !emp.dept || emp.dept.toLowerCase() === "general" || h.dept.toLowerCase() === emp.dept.toLowerCase();
+                  if (!deptOk) return false;
+                  const hBranch = (h.branch_location || "All").toLowerCase();
+                  const empLoc = (emp.work_location || "Kolkata").toLowerCase();
+                  return hBranch === "all" || hBranch === "all branches" || empLoc.includes(hBranch) || hBranch.includes(empLoc);
+                })
               ) {
-                const matchedHoliday = holidayMap[dStr];
+                const matchedHoliday = (holidaysByDate[dStr] || []).find(h => {
+                  if (h.is_working_day || h.type === "Working Day") return false;
+                  const deptOk = !h.dept || h.dept.toLowerCase() === "all" || !emp.dept || emp.dept.toLowerCase() === "general" || h.dept.toLowerCase() === emp.dept.toLowerCase();
+                  if (!deptOk) return false;
+                  const hBranch = (h.branch_location || "All").toLowerCase();
+                  const empLoc = (emp.work_location || "Kolkata").toLowerCase();
+                  return hBranch === "all" || hBranch === "all branches" || empLoc.includes(hBranch) || hBranch.includes(empLoc);
+                }) || holidayMap[dStr];
                 status = "Holiday";
                 shiftName = "Holiday";
                 shiftStart = "—";

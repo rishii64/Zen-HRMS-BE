@@ -36,7 +36,18 @@ app.use("/api", (req, res, next) => {
 app.get("/", (req, res) => { res.send("Backend working!"); });
 
 // API Routes
+// API Routes
 app.use("/api/auth", authRoutes);
+
+// Direct root aliases for predictive analytics and public portal to prevent any double-prefix 404
+const CustomReportController = require("./controller/customReportController");
+const PreJoiningController = require("./controller/preJoiningController");
+const upload = require("./utils/multer");
+app.get("/api/analytics/predictive", authenticate, CustomReportController.getPredictiveAnalytics);
+app.get("/api/auth/api/analytics/predictive", authenticate, CustomReportController.getPredictiveAnalytics);
+app.get("/api/pre-joining/public/:token", PreJoiningController.publicGetPortalData);
+app.post("/api/pre-joining/public/:token/upload", upload.single("doc_file"), PreJoiningController.publicUploadDoc);
+app.post("/api/pre-joining/public/:token/submit", PreJoiningController.publicSubmitPortal);
 
 const HolidayController = require("./controller/holidayController");
 app.get("/api/holidays", HolidayController.getHolidays);
@@ -58,11 +69,15 @@ app.post("/api/hr-events/:id/broadcast", authenticate, HrEventController.broadca
 
 const http = require("http");
 const { initSocket } = require("./socket");
+const { initPolicyRenewalScheduler } = require("./services/policyRenewalScheduler");
+const { initInfoSecScheduler } = require("./services/infoSecScheduler");
 
 // Database connection
 db.connectDB()
   .then(() => {
     console.log("Database connected...");
+    initPolicyRenewalScheduler();
+    initInfoSecScheduler();
   })
   .catch((err) => console.log("Error: " + err));
 

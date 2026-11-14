@@ -25,6 +25,14 @@ const NotificationController = require("../controller/notificationController");
 const TransferController = require("../controller/transferController");
 const PromotionController = require("../controller/promotionController");
 const OvertimeController = require("../controller/overtimeController");
+const ApprovalController = require("../controller/approvalController");
+const LoanAdvanceController = require("../controller/loanAdvanceController");
+const StatutoryReportController = require("../controller/statutoryReportController");
+const InfoSecController = require("../controller/infoSecController");
+const Feedback360Controller = require("../controller/feedback360Controller");
+const CustomReportController = require("../controller/customReportController");
+const PreJoiningController = require("../controller/preJoiningController");
+const AttendanceRegularizationController = require("../controller/attendanceRegularizationController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -105,6 +113,16 @@ router.post("/attendance/auto-clock-out", authenticateAllowExpired, AttendanceCo
 router.post("/attendance/portal-logout", authenticateAllowExpired, AttendanceController.portalLogout);
 router.post("/attendance/mark", authenticate, AttendanceController.markManualAttendance);
 
+// Attendance Regularization & Reversal routes
+router.get("/attendance/regularization/date-lookup", authenticate, AttendanceRegularizationController.getAttendanceForDate);
+router.post("/attendance/regularization/apply", authenticate, upload.single("proof_doc"), AttendanceRegularizationController.applyRegularization);
+router.get("/attendance/regularization/my-requests", authenticate, AttendanceRegularizationController.getMyRegularizations);
+router.delete("/attendance/regularization/:id/cancel", authenticate, AttendanceRegularizationController.cancelMyRegularization);
+router.get("/attendance/regularization/all", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager", "accounts", "payroll"), AttendanceRegularizationController.getAllRegularizations);
+router.patch("/attendance/regularization/:id/approve", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager", "accounts", "payroll"), AttendanceRegularizationController.approveRegularization);
+router.patch("/attendance/regularization/:id/reject", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager", "accounts", "payroll"), AttendanceRegularizationController.rejectRegularization);
+router.post("/attendance/regularization/:id/reverse", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager"), AttendanceRegularizationController.reverseAttendance);
+
 // Biometric Hardware & Real-Time Sync routes
 router.post("/attendance/biometric/punch", optionalDeviceAuth, BiometricController.recordPunch);
 router.post("/attendance/biometric/batch-sync", optionalDeviceAuth, BiometricController.batchSyncPunches);
@@ -127,6 +145,7 @@ router.post("/schedule/bulk-upload", authenticate, ScheduleController.bulkUpload
 router.delete("/schedule/:id", authenticate, ScheduleController.deleteSchedule);
 
 // Holiday Calendar routes
+router.get("/holidays/branches", HolidayController.getBranchSummary);
 router.get("/holidays", HolidayController.getHolidays);
 router.post("/holidays", authenticate, HolidayController.addHoliday);
 router.post("/holidays/add", authenticate, HolidayController.addHoliday);
@@ -174,6 +193,16 @@ router.patch("/resignation/:id/submit-handover", authenticate, ResignationContro
 router.patch("/resignation/:id/confirm-handover", authenticate, ResignationController.confirmHandover);
 router.patch("/resignation/:id/admin-action", authenticate, ResignationController.adminReview);
 router.patch("/resignation/:id/hr-action", authenticate, ResignationController.hrReview);
+
+// Knowledge Transfer (KT) Tracking Module
+router.get("/resignation/:id/kt", authenticate, ResignationController.getKtDetails);
+router.post("/resignation/:id/kt/tasks", authenticate, ResignationController.updateKtTasks);
+router.post("/resignation/:id/kt/tasks/add", authenticate, ResignationController.addKtTask);
+router.patch("/resignation/:id/kt/tasks/:taskId", authenticate, ResignationController.updateSingleKtTask);
+router.delete("/resignation/:id/kt/tasks/:taskId", authenticate, ResignationController.deleteKtTask);
+router.post("/resignation/:id/kt/submit", authenticate, ResignationController.submitKtForSignoff);
+router.post("/resignation/:id/kt/recipient-signoff", authenticate, ResignationController.recipientKtSignoff);
+router.post("/resignation/:id/kt/verify-handover", authenticate, ResignationController.verifyKtHandover);
 
 // Serial Department Clearances & Custom Departments
 router.post("/resignation/:id/raise-clearance", authenticate, ResignationController.raiseClearance);
@@ -282,6 +311,39 @@ router.delete("/mediclaim/hospitals/:id", authenticate, authorizeRoles("hr", "ad
 
 // Mediclaim Employee Coverage (Sum Insured) Desk (HR only)
 router.get("/mediclaim/employees-coverage", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getEmployeesCoverage);
+
+// Mediclaim Policy Renewal & Automated Reminders (30d, 15d, 7d intervals)
+router.get("/mediclaim/renewal-status", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.getRenewalStatus);
+router.post("/mediclaim/trigger-renewal-reminders", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.triggerRenewalReminders);
+router.patch("/mediclaim/policy/:id/renew", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll"), MediclaimController.renewPolicy);
+
+// ==========================================
+// Information Security (InfoSec) Awareness Campaigns & Compliance
+// ==========================================
+router.get("/infosec/campaigns", authenticate, InfoSecController.getCampaigns);
+router.get("/infosec/campaign/:id", authenticate, InfoSecController.getCampaignDetails);
+router.post("/infosec/campaign", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo"), InfoSecController.createCampaign);
+router.put("/infosec/campaign/:id", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo"), InfoSecController.updateCampaign);
+router.delete("/infosec/campaign/:id", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo"), InfoSecController.deleteCampaign);
+router.get("/infosec/my-compliance", authenticate, InfoSecController.getMyCompliance);
+router.post("/infosec/acknowledge", authenticate, InfoSecController.submitAcknowledgment);
+router.get("/infosec/roster", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo"), InfoSecController.getCampaignRoster);
+router.post("/infosec/campaign/:id/remind", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo"), InfoSecController.sendReminders);
+router.get("/infosec/certificate/:certNumber", authenticate, InfoSecController.getAcknowledgmentCertificate);
+
+// ==========================================
+// 360-Degree Feedback System (Multi-Rater, Peer, Upward, Stakeholder)
+// ==========================================
+router.get("/feedback360/cycles", authenticate, Feedback360Controller.getCycles);
+router.post("/feedback360/cycles", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "hrmanager"), Feedback360Controller.createCycle);
+router.get("/feedback360/employees", authenticate, Feedback360Controller.getEmployeesForNomination);
+router.post("/feedback360/nominate", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "hod", "manager", "hrmanager"), Feedback360Controller.nominateRaters);
+router.get("/feedback360/my-reviews", authenticate, Feedback360Controller.getMyReviews);
+router.post("/feedback360/submit-review", authenticate, Feedback360Controller.submitReview);
+router.get("/feedback360/my-summary", authenticate, Feedback360Controller.getMySummary);
+router.get("/feedback360/cycle/:id/summaries", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "hod", "manager", "hrmanager"), Feedback360Controller.getCycleSummaries);
+router.post("/feedback360/publish", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "hrmanager"), Feedback360Controller.publishSummary);
+router.post("/feedback360/remind", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "hrmanager"), Feedback360Controller.sendReminders);
 
 // ==========================================
 // KPI & Performance Management Routes
@@ -524,5 +586,67 @@ router.post("/overtime", authenticate, OvertimeController.createOvertimeTicket);
 router.put("/overtime/:id/review", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "management", "ceo", "coo", "hrmanager"), OvertimeController.reviewOvertimeTicket);
 router.post("/overtime/sync-payroll", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "management", "ceo", "coo", "hrmanager"), OvertimeController.syncOvertimeWithPayroll);
 router.delete("/overtime/:id", authenticate, OvertimeController.deleteOvertimeTicket);
+
+// ==========================================
+// Sequential Multi-Level Approvals Engine Routes
+// ==========================================
+router.get("/approvals/inbox", authenticate, ApprovalController.getPendingApprovals);
+router.get("/approvals/my-requests", authenticate, ApprovalController.getMySubmittedRequests);
+router.get("/approvals/history", authenticate, ApprovalController.getApprovalHistory);
+router.get("/approvals/entity/:module/:entityId", authenticate, ApprovalController.getEntityApproval);
+router.get("/approvals/workflows", authenticate, ApprovalController.getAllWorkflows);
+router.post("/approvals/workflows", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), ApprovalController.createWorkflow);
+router.put("/approvals/workflows/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), ApprovalController.updateWorkflow);
+router.delete("/approvals/workflows/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), ApprovalController.deleteWorkflow);
+router.post("/approvals/workflows/reset-defaults", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), ApprovalController.resetDefaultWorkflows);
+router.get("/approvals/:id", authenticate, ApprovalController.getApprovalRequestById);
+router.post("/approvals/:id/action", authenticate, ApprovalController.submitApprovalAction);
+
+// ==========================================
+// Loan & Salary Advance Management Routes
+// ==========================================
+router.get("/loans/calculate-emi", authenticate, LoanAdvanceController.calculateEmiPreview);
+router.post("/loans/apply", authenticate, LoanAdvanceController.applyLoanAdvance);
+router.get("/loans/my", authenticate, LoanAdvanceController.getMyLoansAdvances);
+router.get("/loans", authenticate, LoanAdvanceController.getAllLoansAdvances);
+router.get("/loans/:id", authenticate, LoanAdvanceController.getLoanDetails);
+router.put("/loans/:id/review", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "finance", "accounts", "management", "ceo", "coo", "hrmanager"), LoanAdvanceController.reviewLoanAdvance);
+router.put("/loans/:id/disburse", authenticate, authorizeRoles("hr", "admin", "finance", "accounts", "management", "ceo", "coo", "hrmanager"), LoanAdvanceController.disburseLoanAdvance);
+router.post("/loans/:id/repay", authenticate, authorizeRoles("hr", "admin", "finance", "accounts", "management", "ceo", "coo", "hrmanager"), LoanAdvanceController.recordManualRepayment);
+router.put("/loans/:id/cancel", authenticate, LoanAdvanceController.cancelLoanAdvance);
+
+// ==========================================
+// Statutory Compliance-Ready Reports Routes
+// ==========================================
+router.get("/statutory/pf-ecr", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "finance", "management", "ceo", "coo", "hrmanager"), StatutoryReportController.getPfEcrReport);
+router.get("/statutory/esic", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "finance", "management", "ceo", "coo", "hrmanager"), StatutoryReportController.getEsicMonthlyReport);
+router.get("/statutory/form16/:employeeId", authenticate, StatutoryReportController.getForm16Data);
+router.get("/statutory/form24q", authenticate, authorizeRoles("hr", "admin", "accounts", "payroll", "finance", "management", "ceo", "coo", "hrmanager"), StatutoryReportController.getForm24QSummary);
+
+// ==========================================
+// Custom Report Builder & Predictive Analytics
+// ==========================================
+router.get("/reports/custom-builder/catalog", authenticate, CustomReportController.getReportCatalog);
+router.post("/reports/custom-builder/generate", authenticate, CustomReportController.generateCustomReport);
+router.get("/analytics/predictive", authenticate, CustomReportController.getPredictiveAnalytics);
+router.get("/api/analytics/predictive", authenticate, CustomReportController.getPredictiveAnalytics);
+
+// ==========================================
+// Pre-Joining Candidate Self-Upload Portal (7-Day Validity)
+// ==========================================
+// Public Candidate Endpoints (No login required, secured by 64-char crypto token)
+router.get("/pre-joining/public/:token", PreJoiningController.publicGetPortalData);
+router.post("/pre-joining/public/:token/upload", upload.single("doc_file"), PreJoiningController.publicUploadDoc);
+router.post("/pre-joining/public/:token/upload-any", upload.any(), PreJoiningController.publicUploadDoc);
+router.post("/pre-joining/public/:token/submit", PreJoiningController.publicSubmitPortal);
+
+// HR / Management Endpoints (Protected)
+router.get("/pre-joining", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager", "accounts", "payroll"), PreJoiningController.getAllPreJoiningLinks);
+router.get("/pre-joining/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager", "accounts", "payroll"), PreJoiningController.getPreJoiningById);
+router.post("/pre-joining/generate", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PreJoiningController.generatePreJoiningLink);
+router.post("/pre-joining/:id/regenerate", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PreJoiningController.regeneratePreJoiningLink);
+router.patch("/pre-joining/:id/verify", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PreJoiningController.verifyPreJoiningDocs);
+router.post("/pre-joining/:id/sync", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PreJoiningController.syncToOnboarding);
+router.delete("/pre-joining/:id", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), PreJoiningController.deletePreJoiningLink);
 
 module.exports = router;

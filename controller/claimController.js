@@ -6,6 +6,7 @@ const {
   sequelize,
 } = require("../config/db");
 const { sendRealtimeNotification } = require("../socket");
+const { initiateApprovalRequest } = require("../services/approvalEngine");
 const { Op } = require("sequelize");
 const path = require("path");
 
@@ -176,6 +177,28 @@ const claimController = {
       });
 
       if (!is_draft) {
+        // Kick off Sequential Multi-Level Approval (Employee ➔ Line Manager ➔ HOD ➔ Finance ➔ Management)
+        try {
+          await initiateApprovalRequest({
+            module: "EXPENSE_CLAIM",
+            entity_id: claim.id,
+            employee_id,
+            title: `${title} (${claimNumber} - ₹${Number(total).toLocaleString("en-IN")})`,
+            description: purpose || title,
+            amount: total,
+            metadata: {
+              claim_number: claimNumber,
+              claim_type,
+              travel_destination,
+              purpose,
+              total_amount: total,
+            },
+            created_by: empName || employee_id,
+          });
+        } catch (apprErr) {
+          console.warn("Sequential approval initiation warning for claim:", apprErr.message);
+        }
+
         sendRealtimeNotification({
           recipient_id: managerId || "ALL",
           recipient_role: managerId ? undefined : "manager",
@@ -408,6 +431,27 @@ const claimController = {
       });
 
       if (submit_now) {
+        // Kick off Sequential Multi-Level Approval
+        try {
+          await initiateApprovalRequest({
+            module: "EXPENSE_CLAIM",
+            entity_id: claim.id,
+            employee_id: claim.employee_id,
+            title: `${claim.title} (${claim.claim_number} - ₹${Number(total).toLocaleString("en-IN")})`,
+            description: claim.purpose || claim.title,
+            amount: total,
+            metadata: {
+              claim_number: claim.claim_number,
+              claim_type: claim.claim_type,
+              purpose: claim.purpose,
+              total_amount: total,
+            },
+            created_by: claim.employee_name,
+          });
+        } catch (apprErr) {
+          console.warn("Sequential approval initiation warning on update:", apprErr.message);
+        }
+
         sendRealtimeNotification({
           recipient_id: claim.manager_id || "ALL",
           recipient_role: claim.manager_id ? undefined : "manager",

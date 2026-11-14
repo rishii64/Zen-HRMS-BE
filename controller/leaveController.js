@@ -8,6 +8,7 @@ const {
   sequelize
 } = require("../config/db");
 const { sendRealtimeNotification } = require("../socket");
+const { initiateApprovalRequest } = require("../services/approvalEngine");
 const { Op } = require("sequelize");
 const { getISTDateStr } = require("../utils/timezone");
 
@@ -415,6 +416,32 @@ const LeaveController = {
         doc_url,
         status: "Pending",
       });
+
+      // Initiate Sequential Multi-Level Approval (Employee ➔ Reporting Manager ➔ HOD ➔ HR)
+      try {
+        await initiateApprovalRequest({
+          module: "LEAVE",
+          entity_id: newLeave.id,
+          employee_id,
+          title: `${resolveLeaveName(leaveCode)} (${computedDays} Day${computedDays > 1 ? "s" : ""})`,
+          description: reason || "Leave application",
+          days: computedDays,
+          metadata: {
+            leave_type: resolveLeaveName(leaveCode),
+            leave_code: leaveCode,
+            start_date,
+            end_date,
+            total_days: computedDays,
+            day_type: day_type || "Full Day",
+            reason,
+            emergency_contact,
+            doc_url,
+          },
+          created_by: empName || employee_id,
+        });
+      } catch (apprErr) {
+        console.warn("Sequential approval initiation warning:", apprErr.message);
+      }
 
       // Notify reporting manager & HR via real-time socket
       const reportingMgr = (user && user.reporting_manager) || (emp && emp.reporting_manager);

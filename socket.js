@@ -37,9 +37,10 @@ const initSocket = (server) => {
 
         // 2. Join personal employee channel
         if (empId) {
-          socket.join(`user:${empId}`);
-          socket.join(`user:${empId.toLowerCase()}`);
           socket.join(`user:${empId.toUpperCase()}`);
+          if (empId !== empId.toUpperCase()) {
+            socket.join(`user:${empId}`);
+          }
         }
 
         // 3. Join role channel
@@ -163,30 +164,33 @@ const sendRealtimeNotification = async ({
       if (isBroadcast) {
         io.to("broadcast").emit("notification", payload);
       } else {
-        let sent = false;
+        const targetRooms = new Set();
 
-        // Specific employee
+        // Specific employee (canonical uppercase room)
         if (recipient_id && recipient_id !== "ALL") {
-          io.to(`user:${recipient_id}`).emit("notification", payload);
-          io.to(`user:${recipient_id.toLowerCase()}`).emit("notification", payload);
-          io.to(`user:${recipient_id.toUpperCase()}`).emit("notification", payload);
-          sent = true;
+          const cleanId = String(recipient_id).trim();
+          targetRooms.add(`user:${cleanId.toUpperCase()}`);
+          if (cleanId !== cleanId.toUpperCase()) {
+            targetRooms.add(`user:${cleanId}`);
+          }
         }
 
         // Specific role
         if (recipient_role && recipient_role !== "all") {
-          io.to(`role:${recipient_role.toLowerCase()}`).emit("notification", payload);
-          sent = true;
+          targetRooms.add(`role:${String(recipient_role).trim().toLowerCase()}`);
         }
 
         // Department
         if (department) {
-          io.to(`dept:${department.toLowerCase()}`).emit("notification", payload);
-          sent = true;
+          targetRooms.add(`dept:${String(department).trim().toLowerCase()}`);
         }
 
-        // Fallback: emit globally if no specific room matched
-        if (!sent) {
+        if (targetRooms.size > 0) {
+          // Socket.IO io.to(roomsArray).emit() unions the targets and sends
+          // EXACTLY ONE socket message to each connected client
+          io.to(Array.from(targetRooms)).emit("notification", payload);
+        } else {
+          // Fallback: emit globally only if no specific room matched
           io.emit("notification", payload);
         }
       }

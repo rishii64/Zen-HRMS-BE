@@ -44,6 +44,11 @@ module.exports = (sequelize) => {
         allowNull: false,
         defaultValue: "All",
       },
+      branch_location: {
+        type: DataTypes.STRING(120),
+        allowNull: false,
+        defaultValue: "All", // "All", "Kolkata", "Mumbai", "Bengaluru", "Delhi NCR", "Odisha", "International - Dubai", "International - London", etc.
+      },
       created_by: {
         type: DataTypes.STRING(100),
         allowNull: true,

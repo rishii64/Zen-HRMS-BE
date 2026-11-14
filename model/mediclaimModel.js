@@ -80,6 +80,29 @@ module.exports = (sequelize) => {
         allowNull: false,
         defaultValue: "Active",
       },
+      renewal_reminder_30d_sent: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+      renewal_reminder_15d_sent: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+      renewal_reminder_7d_sent: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+      last_renewal_reminder_date: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      renewal_notes: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
     },
     {
       tableName: "mediclaim_policies",

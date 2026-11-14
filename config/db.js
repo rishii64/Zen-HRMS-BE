@@ -68,6 +68,13 @@ const Notification = require("../model/notificationModel")(sequelize);
 const Transfer = require("../model/transferModel")(sequelize);
 const Promotion = require("../model/promotionModel")(sequelize);
 const OvertimeTicket = require("../model/overtimeModel")(sequelize);
+const { ApprovalWorkflow, ApprovalWorkflowStep } = require("../model/approvalWorkflowModel")(sequelize);
+const { ApprovalRequest, ApprovalRequestStep } = require("../model/approvalRequestModel")(sequelize);
+const { LoanAdvance, LoanRepaymentLog } = require("../model/loanAdvanceModel")(sequelize);
+const { InfoSecCampaign, InfoSecAcknowledgment } = require("../model/infoSecModel")(sequelize);
+const { FeedbackCycle360, FeedbackAssignment360, FeedbackSummary360 } = require("../model/feedback360Model")(sequelize);
+const CandidatePreJoining = require("../model/candidatePreJoiningModel")(sequelize);
+const AttendanceRegularization = require("../model/attendanceRegularizationModel")(sequelize);
 
 // Model Associations
 
@@ -82,6 +89,40 @@ Promotion.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_
 // Overtime associations
 Employee.hasMany(OvertimeTicket, { foreignKey: "employee_id", sourceKey: "employee_id", as: "overtimeTickets" });
 OvertimeTicket.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
+// Sequential Approval Workflow & Request associations
+ApprovalWorkflow.hasMany(ApprovalWorkflowStep, { foreignKey: "workflow_id", as: "steps", onDelete: "CASCADE" });
+ApprovalWorkflowStep.belongsTo(ApprovalWorkflow, { foreignKey: "workflow_id", as: "workflow" });
+
+ApprovalRequest.hasMany(ApprovalRequestStep, { foreignKey: "request_id", as: "steps", onDelete: "CASCADE" });
+ApprovalRequestStep.belongsTo(ApprovalRequest, { foreignKey: "request_id", as: "request" });
+
+ApprovalWorkflow.hasMany(ApprovalRequest, { foreignKey: "workflow_id", as: "requests" });
+ApprovalRequest.belongsTo(ApprovalWorkflow, { foreignKey: "workflow_id", as: "workflow" });
+
+Employee.hasMany(ApprovalRequest, { foreignKey: "employee_id", sourceKey: "employee_id", as: "approvalRequests" });
+ApprovalRequest.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
+// Loan & Salary Advance associations
+LoanAdvance.hasMany(LoanRepaymentLog, { foreignKey: "loan_id", as: "repaymentLogs", onDelete: "CASCADE" });
+LoanRepaymentLog.belongsTo(LoanAdvance, { foreignKey: "loan_id", as: "loan" });
+
+Employee.hasMany(LoanAdvance, { foreignKey: "employee_id", sourceKey: "employee_id", as: "loansAdvances" });
+LoanAdvance.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
+// InfoSec Awareness Campaign associations
+InfoSecCampaign.hasMany(InfoSecAcknowledgment, { foreignKey: "campaign_id", as: "acknowledgments", onDelete: "CASCADE" });
+InfoSecAcknowledgment.belongsTo(InfoSecCampaign, { foreignKey: "campaign_id", as: "campaign" });
+Employee.hasMany(InfoSecAcknowledgment, { foreignKey: "employee_id", sourceKey: "employee_id", as: "infosecAcknowledgments" });
+InfoSecAcknowledgment.belongsTo(Employee, { foreignKey: "employee_id", targetKey: "employee_id", as: "employee" });
+
+// 360-Degree Feedback associations
+FeedbackCycle360.hasMany(FeedbackAssignment360, { foreignKey: "cycle_id", as: "assignments", onDelete: "CASCADE" });
+FeedbackAssignment360.belongsTo(FeedbackCycle360, { foreignKey: "cycle_id", as: "cycle" });
+FeedbackCycle360.hasMany(FeedbackSummary360, { foreignKey: "cycle_id", as: "summaries", onDelete: "CASCADE" });
+FeedbackSummary360.belongsTo(FeedbackCycle360, { foreignKey: "cycle_id", as: "cycle" });
+Employee.hasMany(FeedbackAssignment360, { foreignKey: "evaluatee_id", sourceKey: "employee_id", as: "feedback360Received" });
+Employee.hasMany(FeedbackAssignment360, { foreignKey: "rater_id", sourceKey: "employee_id", as: "feedback360Given" });
 
 
 // 1. User <-> Employee
@@ -426,6 +467,32 @@ Onboarding.belongsTo(Employee, {
   foreignKey: "employee_id",
   targetKey: "employee_id",
   as: "employee",
+});
+
+// CandidatePreJoining associations
+CandidatePreJoining.belongsTo(RecruitmentCandidate, {
+  foreignKey: "candidate_id",
+  as: "candidate",
+});
+CandidatePreJoining.belongsTo(Onboarding, {
+  foreignKey: "onboarding_id",
+  as: "onboarding",
+});
+
+// AttendanceRegularization associations
+AttendanceRegularization.belongsTo(Employee, {
+  foreignKey: "employee_id",
+  targetKey: "employee_id",
+  as: "employee",
+});
+Employee.hasMany(AttendanceRegularization, {
+  foreignKey: "employee_id",
+  sourceKey: "employee_id",
+  as: "regularizations",
+});
+AttendanceRegularization.belongsTo(Attendance, {
+  foreignKey: "attendance_id",
+  as: "attendanceRecord",
 });
 
 // 14. Training & Development Module Associations
@@ -1174,9 +1241,377 @@ const connectDB = async () => {
         CREATE INDEX IF NOT EXISTS idx_recruitment_offers_token ON recruitment_offers (acceptance_token);
         CREATE INDEX IF NOT EXISTS idx_recruitment_offers_status ON recruitment_offers (offer_status);
 
+        -- Sequential Multi-Level Approvals Tables
+        CREATE TABLE IF NOT EXISTS approval_workflows (
+          id SERIAL PRIMARY KEY,
+          module VARCHAR(50) NOT NULL,
+          workflow_name VARCHAR(150) NOT NULL,
+          description TEXT,
+          department VARCHAR(100) NOT NULL DEFAULT 'ALL',
+          min_amount DECIMAL(12, 2) DEFAULT 0,
+          min_days FLOAT DEFAULT 0,
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          allow_auto_skip BOOLEAN NOT NULL DEFAULT true,
+          notify_on_each_step BOOLEAN NOT NULL DEFAULT true,
+          created_by VARCHAR(100) DEFAULT 'HR Admin',
+          updated_by VARCHAR(100) DEFAULT 'HR Admin',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS approval_workflow_steps (
+          id SERIAL PRIMARY KEY,
+          workflow_id INTEGER NOT NULL REFERENCES approval_workflows(id) ON DELETE CASCADE,
+          level_order INTEGER NOT NULL,
+          level_name VARCHAR(150) NOT NULL,
+          approver_type VARCHAR(50) NOT NULL DEFAULT 'REPORTING_MANAGER',
+          approver_role VARCHAR(50),
+          specific_employee_id VARCHAR(50),
+          specific_employee_name VARCHAR(150),
+          condition_type VARCHAR(50) NOT NULL DEFAULT 'ALWAYS',
+          condition_value FLOAT DEFAULT 0,
+          is_mandatory BOOLEAN NOT NULL DEFAULT true,
+          can_auto_skip BOOLEAN NOT NULL DEFAULT true,
+          sla_hours INTEGER DEFAULT 48,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS approval_requests (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          request_number VARCHAR(50) NOT NULL UNIQUE,
+          module VARCHAR(50) NOT NULL,
+          entity_id VARCHAR(100),
+          workflow_id INTEGER,
+          employee_id VARCHAR(50) NOT NULL,
+          employee_name VARCHAR(150) NOT NULL,
+          employee_email VARCHAR(255),
+          department VARCHAR(100),
+          designation VARCHAR(100),
+          title VARCHAR(255) NOT NULL,
+          description TEXT,
+          amount DECIMAL(12, 2) DEFAULT 0,
+          days FLOAT DEFAULT 0,
+          total_levels INTEGER NOT NULL DEFAULT 1,
+          current_level INTEGER NOT NULL DEFAULT 1,
+          current_level_name VARCHAR(150),
+          current_approver_id VARCHAR(50),
+          current_approver_name VARCHAR(150),
+          current_approver_role VARCHAR(50),
+          status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+          final_decision VARCHAR(50),
+          final_decision_date TIMESTAMPTZ,
+          final_decision_by VARCHAR(150),
+          final_remarks TEXT,
+          metadata JSONB,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS approval_request_steps (
+          id SERIAL PRIMARY KEY,
+          request_id UUID NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+          level_order INTEGER NOT NULL,
+          level_name VARCHAR(150) NOT NULL,
+          approver_type VARCHAR(50) NOT NULL,
+          approver_role VARCHAR(50),
+          assigned_to_id VARCHAR(50),
+          assigned_to_name VARCHAR(150),
+          status VARCHAR(50) NOT NULL DEFAULT 'WAITING',
+          decision VARCHAR(50),
+          comments TEXT,
+          acted_by_id VARCHAR(50),
+          acted_by_name VARCHAR(150),
+          acted_by_role VARCHAR(50),
+          action_date TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_approval_req_emp ON approval_requests (employee_id);
+        CREATE INDEX IF NOT EXISTS idx_approval_req_mod ON approval_requests (module);
+        CREATE INDEX IF NOT EXISTS idx_approval_req_status ON approval_requests (status);
+        CREATE INDEX IF NOT EXISTS idx_approval_req_steps_req ON approval_request_steps (request_id);
+        CREATE INDEX IF NOT EXISTS idx_approval_req_steps_assign ON approval_request_steps (assigned_to_id);
+
+        -- Loans & Salary Advances Tables
+        CREATE TABLE IF NOT EXISTS loans_advances (
+          id SERIAL PRIMARY KEY,
+          application_number VARCHAR(50) NOT NULL UNIQUE,
+          employee_id VARCHAR(50) NOT NULL,
+          employee_name VARCHAR(150) NOT NULL,
+          employee_email VARCHAR(255),
+          department VARCHAR(100),
+          designation VARCHAR(100),
+          type VARCHAR(50) NOT NULL DEFAULT 'SALARY_ADVANCE',
+          principal_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+          interest_rate FLOAT NOT NULL DEFAULT 0,
+          interest_type VARCHAR(50) DEFAULT 'REDUCING_BALANCE',
+          tenure_months INTEGER NOT NULL DEFAULT 1,
+          monthly_emi DECIMAL(12, 2) NOT NULL DEFAULT 0,
+          total_interest DECIMAL(12, 2) NOT NULL DEFAULT 0,
+          total_repayable DECIMAL(12, 2) NOT NULL DEFAULT 0,
+          remaining_balance DECIMAL(12, 2) NOT NULL DEFAULT 0,
+          paid_amount DECIMAL(12, 2) DEFAULT 0,
+          paid_installments INTEGER DEFAULT 0,
+          total_installments INTEGER NOT NULL DEFAULT 1,
+          purpose VARCHAR(255) NOT NULL,
+          reason_details TEXT,
+          repayment_start_month VARCHAR(20) NOT NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'PENDING_APPROVAL',
+          repayment_schedule JSONB,
+          manager_id VARCHAR(50),
+          manager_name VARCHAR(150),
+          manager_decision VARCHAR(50),
+          manager_comments TEXT,
+          manager_action_date TIMESTAMPTZ,
+          finance_id VARCHAR(50),
+          finance_name VARCHAR(150),
+          finance_decision VARCHAR(50),
+          finance_comments TEXT,
+          finance_action_date TIMESTAMPTZ,
+          disbursement_date DATE,
+          disbursement_mode VARCHAR(50) DEFAULT 'Bank Transfer',
+          disbursement_ref VARCHAR(100),
+          disbursed_by VARCHAR(150),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS loan_repayment_logs (
+          id SERIAL PRIMARY KEY,
+          loan_id INTEGER NOT NULL REFERENCES loans_advances(id) ON DELETE CASCADE,
+          employee_id VARCHAR(50) NOT NULL,
+          month_year VARCHAR(20) NOT NULL,
+          installment_number INTEGER NOT NULL,
+          emi_amount DECIMAL(12, 2) NOT NULL,
+          principal_component DECIMAL(12, 2) NOT NULL,
+          interest_component DECIMAL(12, 2) NOT NULL DEFAULT 0,
+          remaining_balance_after DECIMAL(12, 2) NOT NULL,
+          payment_source VARCHAR(50) DEFAULT 'PAYROLL_DEDUCTION',
+          payroll_id INTEGER,
+          deduction_date DATE NOT NULL DEFAULT CURRENT_DATE,
+          remarks VARCHAR(255),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_loan_emp ON loans_advances (employee_id);
+        CREATE INDEX IF NOT EXISTS idx_loan_status ON loans_advances (status);
+        CREATE INDEX IF NOT EXISTS idx_loan_type ON loans_advances (type);
+        CREATE INDEX IF NOT EXISTS idx_repayment_loan_id ON loan_repayment_logs (loan_id);
+        CREATE INDEX IF NOT EXISTS idx_repayment_emp ON loan_repayment_logs (employee_id);
+
+        CREATE TABLE IF NOT EXISTS infosec_campaigns (
+          id SERIAL PRIMARY KEY,
+          campaign_code VARCHAR(100) UNIQUE NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          category VARCHAR(100) NOT NULL DEFAULT 'Phishing & Social Engineering',
+          description TEXT,
+          start_date DATE NOT NULL,
+          end_date DATE NOT NULL,
+          target_departments VARCHAR(255) DEFAULT 'All',
+          status VARCHAR(50) DEFAULT 'Active',
+          mandatory BOOLEAN DEFAULT true,
+          passing_score INTEGER DEFAULT 80,
+          training_modules TEXT,
+          quiz_questions TEXT,
+          acknowledgment_statement TEXT,
+          created_by VARCHAR(100) DEFAULT 'InfoSec Compliance Officer',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS infosec_acknowledgments (
+          id SERIAL PRIMARY KEY,
+          campaign_id INTEGER NOT NULL REFERENCES infosec_campaigns(id) ON DELETE CASCADE,
+          employee_id VARCHAR(50) NOT NULL,
+          employee_name VARCHAR(150),
+          employee_email VARCHAR(150),
+          department VARCHAR(100),
+          designation VARCHAR(100),
+          status VARCHAR(50) DEFAULT 'Pending',
+          quiz_score INTEGER,
+          quiz_attempts INTEGER DEFAULT 0,
+          quiz_passed BOOLEAN DEFAULT false,
+          acknowledged_at TIMESTAMPTZ,
+          ip_address VARCHAR(100),
+          user_agent TEXT,
+          compliance_hash VARCHAR(100),
+          certificate_issued BOOLEAN DEFAULT false,
+          certificate_number VARCHAR(100),
+          notes TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT uq_campaign_employee UNIQUE (campaign_id, employee_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_infosec_camp_code ON infosec_campaigns (campaign_code);
+        CREATE INDEX IF NOT EXISTS idx_infosec_camp_status ON infosec_campaigns (status);
+        CREATE INDEX IF NOT EXISTS idx_infosec_ack_camp ON infosec_acknowledgments (campaign_id);
+        CREATE INDEX IF NOT EXISTS idx_infosec_ack_emp ON infosec_acknowledgments (employee_id);
+        CREATE INDEX IF NOT EXISTS idx_infosec_ack_status ON infosec_acknowledgments (status);
+
+        CREATE TABLE IF NOT EXISTS feedback_cycles_360 (
+          id SERIAL PRIMARY KEY,
+          cycle_code VARCHAR(100) UNIQUE NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          description TEXT,
+          start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+          due_date DATE NOT NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'Active',
+          allow_anonymous_peer BOOLEAN NOT NULL DEFAULT true,
+          allow_anonymous_subordinate BOOLEAN NOT NULL DEFAULT true,
+          allow_anonymous_stakeholder BOOLEAN NOT NULL DEFAULT false,
+          min_raters_required INTEGER NOT NULL DEFAULT 3,
+          competencies_config TEXT,
+          created_by VARCHAR(100) DEFAULT 'HR Operations',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS feedback_assignments_360 (
+          id SERIAL PRIMARY KEY,
+          cycle_id INTEGER NOT NULL REFERENCES feedback_cycles_360(id) ON DELETE CASCADE,
+          evaluatee_id VARCHAR(50) NOT NULL,
+          evaluatee_name VARCHAR(120),
+          evaluatee_dept VARCHAR(100),
+          evaluatee_designation VARCHAR(120),
+          rater_id VARCHAR(50) NOT NULL,
+          rater_name VARCHAR(120),
+          rater_dept VARCHAR(100),
+          rater_designation VARCHAR(120),
+          rater_relationship VARCHAR(50) NOT NULL DEFAULT 'Peer',
+          is_anonymous BOOLEAN NOT NULL DEFAULT false,
+          status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+          overall_score NUMERIC(4, 2),
+          competency_scores TEXT,
+          strengths_feedback TEXT,
+          growth_areas_feedback TEXT,
+          general_comments TEXT,
+          submitted_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT uq_cycle_evaluatee_rater UNIQUE (cycle_id, evaluatee_id, rater_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS feedback_summaries_360 (
+          id SERIAL PRIMARY KEY,
+          cycle_id INTEGER NOT NULL REFERENCES feedback_cycles_360(id) ON DELETE CASCADE,
+          evaluatee_id VARCHAR(50) NOT NULL,
+          evaluatee_name VARCHAR(120),
+          evaluatee_dept VARCHAR(100),
+          evaluatee_designation VARCHAR(120),
+          total_raters_assigned INTEGER NOT NULL DEFAULT 0,
+          total_raters_submitted INTEGER NOT NULL DEFAULT 0,
+          self_avg_score NUMERIC(4, 2),
+          manager_avg_score NUMERIC(4, 2),
+          peer_avg_score NUMERIC(4, 2),
+          subordinate_avg_score NUMERIC(4, 2),
+          stakeholder_avg_score NUMERIC(4, 2),
+          composite_score NUMERIC(4, 2),
+          competency_radar_data TEXT,
+          qualitative_summary TEXT,
+          status VARCHAR(50) NOT NULL DEFAULT 'In_Progress',
+          published_at TIMESTAMPTZ,
+          hr_summary_notes TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT uq_summary_cycle_evaluatee UNIQUE (cycle_id, evaluatee_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_f360_cycle_code ON feedback_cycles_360 (cycle_code);
+        CREATE INDEX IF NOT EXISTS idx_f360_cycle_status ON feedback_cycles_360 (status);
+        CREATE INDEX IF NOT EXISTS idx_f360_assign_cycle ON feedback_assignments_360 (cycle_id);
+        CREATE INDEX IF NOT EXISTS idx_f360_assign_eval ON feedback_assignments_360 (evaluatee_id);
+        CREATE INDEX IF NOT EXISTS idx_f360_assign_rater ON feedback_assignments_360 (rater_id);
+        CREATE INDEX IF NOT EXISTS idx_f360_assign_status ON feedback_assignments_360 (status);
+        CREATE INDEX IF NOT EXISTS idx_f360_summary_eval ON feedback_summaries_360 (evaluatee_id);
+
+        -- Attendance Regularizations & Reversal Table
+        CREATE TABLE IF NOT EXISTS attendance_regularizations (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          request_no VARCHAR(50) NOT NULL UNIQUE,
+          employee_id VARCHAR(50) NOT NULL,
+          employee_name VARCHAR(100) NOT NULL,
+          department VARCHAR(100) NOT NULL,
+          attendance_date DATE NOT NULL,
+          request_type VARCHAR(50) NOT NULL DEFAULT 'MISSED_PUNCH',
+          original_check_in VARCHAR(20),
+          original_check_out VARCHAR(20),
+          original_status VARCHAR(50) DEFAULT 'Absent',
+          requested_check_in VARCHAR(20) NOT NULL DEFAULT '09:30',
+          requested_check_out VARCHAR(20) NOT NULL DEFAULT '18:30',
+          requested_status VARCHAR(50) NOT NULL DEFAULT 'Present',
+          calculated_work_hours NUMERIC(5, 2) DEFAULT 9.00,
+          reason TEXT NOT NULL,
+          supporting_doc_url VARCHAR(500),
+          status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+          reviewed_by_id VARCHAR(50),
+          reviewed_by_name VARCHAR(100),
+          reviewed_at TIMESTAMPTZ,
+          review_remarks TEXT,
+          attendance_id INTEGER,
+          "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_att_reg_emp ON attendance_regularizations (employee_id);
+        CREATE INDEX IF NOT EXISTS idx_att_reg_date ON attendance_regularizations (attendance_date);
+        CREATE INDEX IF NOT EXISTS idx_att_reg_status ON attendance_regularizations (status);
+
+        -- Candidate Pre-Joining Portal Table
+        CREATE TABLE IF NOT EXISTS candidate_pre_joinings (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          token VARCHAR(128) NOT NULL UNIQUE,
+          candidate_id UUID,
+          onboarding_id UUID,
+          offer_id INTEGER,
+          candidate_name VARCHAR(255) NOT NULL,
+          candidate_email VARCHAR(255) NOT NULL,
+          phone VARCHAR(50),
+          designation VARCHAR(255),
+          department VARCHAR(255),
+          joining_date DATE,
+          work_location VARCHAR(255) DEFAULT 'Headquarters',
+          expires_at TIMESTAMPTZ NOT NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'PENDING_UPLOAD',
+          submitted_at TIMESTAMPTZ,
+          verified_at TIMESTAMPTZ,
+          verified_by_name VARCHAR(255),
+          verification_remarks TEXT,
+          personal_details JSONB DEFAULT '{}'::jsonb,
+          bank_details JSONB DEFAULT '{}'::jsonb,
+          kyc_documents JSONB DEFAULT '{}'::jsonb,
+          prior_employment JSONB DEFAULT '{}'::jsonb,
+          educational_documents JSONB DEFAULT '{}'::jsonb,
+          digital_signature_name VARCHAR(255),
+          declaration_agreed BOOLEAN NOT NULL DEFAULT false,
+          submission_ip VARCHAR(100),
+          submission_user_agent TEXT,
+          synced_to_onboarding BOOLEAN NOT NULL DEFAULT false,
+          synced_at TIMESTAMPTZ,
+          created_by_name VARCHAR(255),
+          created_by_id VARCHAR(100),
+          "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_prejoin_token ON candidate_pre_joinings (token);
+        CREATE INDEX IF NOT EXISTS idx_prejoin_email ON candidate_pre_joinings (candidate_email);
+        CREATE INDEX IF NOT EXISTS idx_prejoin_status ON candidate_pre_joinings (status);
+        CREATE INDEX IF NOT EXISTS idx_prejoin_expires ON candidate_pre_joinings (expires_at);
+
       `);
     } catch (migErr) {
       console.warn("Schema initialization check note:", migErr.message);
+    }
+
+    try {
+      await AttendanceRegularization.sync();
+      await CandidatePreJoining.sync();
+    } catch (autoSyncErr) {
+      console.warn("Model direct sync note:", autoSyncErr.message);
     }
     // In production, schema is managed via PG_Complete_Schema.sql to prevent lock contention
     if (process.env.NODE_ENV !== "production") {
@@ -1297,6 +1732,8 @@ const connectDB = async () => {
         CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance (date);
         CREATE INDEX IF NOT EXISTS idx_attendance_dept_date ON attendance (dept, date);
         CREATE INDEX IF NOT EXISTS idx_schedules_emp_date ON schedules (employee_id, date);
+        ALTER TABLE holidays ADD COLUMN IF NOT EXISTS branch_location VARCHAR(120) DEFAULT 'All';
+        CREATE INDEX IF NOT EXISTS idx_holidays_branch ON holidays (branch_location);
         CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays (date);
       `);
     } catch (idxErr) {
@@ -1327,7 +1764,7 @@ const connectDB = async () => {
       // ignore
     }
 
-    // Automatically ensure resignations table has admin approval tracking columns
+    // Automatically ensure resignations table has admin approval tracking columns & KT module columns
     try {
       await sequelize.query(`
         ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_id VARCHAR(50);
@@ -1335,8 +1772,33 @@ const connectDB = async () => {
         ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_decision VARCHAR(50);
         ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_comments TEXT;
         ALTER TABLE resignations ADD COLUMN IF NOT EXISTS admin_action_date TIMESTAMPTZ;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_tasks JSONB DEFAULT '[]'::jsonb;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_status VARCHAR(50) DEFAULT 'NOT_STARTED';
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_recipient_feedback TEXT;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_recipient_rating INTEGER;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_recipient_signed_at TIMESTAMPTZ;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_recipient_signed_by_id VARCHAR(50);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_recipient_signed_by_name VARCHAR(100);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_manager_verification_notes TEXT;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_manager_verified_at TIMESTAMPTZ;
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_manager_verified_by_id VARCHAR(50);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_manager_verified_by_name VARCHAR(100);
+        ALTER TABLE resignations ADD COLUMN IF NOT EXISTS kt_certificate_number VARCHAR(100);
       `);
     } catch (colErr) {
+      // ignore
+    }
+
+    // Automatically ensure mediclaim_policies table has renewal reminder tracking columns
+    try {
+      await sequelize.query(`
+        ALTER TABLE mediclaim_policies ADD COLUMN IF NOT EXISTS renewal_reminder_30d_sent BOOLEAN DEFAULT false;
+        ALTER TABLE mediclaim_policies ADD COLUMN IF NOT EXISTS renewal_reminder_15d_sent BOOLEAN DEFAULT false;
+        ALTER TABLE mediclaim_policies ADD COLUMN IF NOT EXISTS renewal_reminder_7d_sent BOOLEAN DEFAULT false;
+        ALTER TABLE mediclaim_policies ADD COLUMN IF NOT EXISTS last_renewal_reminder_date TIMESTAMPTZ;
+        ALTER TABLE mediclaim_policies ADD COLUMN IF NOT EXISTS renewal_notes TEXT;
+      `);
+    } catch (medColErr) {
       // ignore
     }
 
@@ -1767,56 +2229,300 @@ const connectDB = async () => {
       console.warn("Could not seed organization masters:", orgSeedErr.message);
     }
 
-    console.log("PG connected...");
-  } catch (err) {
-    console.error("Postgres connection error:", err.message);
-  }
-};
+      // Seed default sequential approval workflows if none exist
+      try {
+        const wfCount = await ApprovalWorkflow.count();
+        if (wfCount === 0) {
+          // 1. Leave Sequential Approval (Employee -> Reporting Manager -> HOD -> HR)
+          const leaveWf = await ApprovalWorkflow.create({
+            module: "LEAVE",
+            workflow_name: "Standard Sequential Leave Approval",
+            description: "Sequential 3-level leave endorsement: Employee ➔ Reporting Manager ➔ Department Head (HOD) ➔ HR Sanction",
+            department: "ALL",
+            min_days: 0,
+            is_active: true,
+            allow_auto_skip: true,
+            notify_on_each_step: true,
+            created_by: "System",
+          });
 
-module.exports = {
-  sequelize,
-  connectDB,
-  User,
-  Employee,
-  PasswordReset,
-  Attendance,
-  Schedule,
-  Leave,
-  Resignation,
-  Payroll,
-  ITDeclaration,
-  MediclaimPolicy,
-  MediclaimClaim,
-  MediclaimHighlight,
-  MediclaimHospital,
-  KpiTemplate,
-  KpiAssignment,
-  KpiGoalItem,
-  PerformanceReview,
-  ReviewQuestionItem,
-  RecruitmentRequisition,
-  RecruitmentCandidate,
-  RecruitmentOffer,
-  Onboarding,
-  Holiday,
-  AdminTask,
-  HrEvent,
-  TrainingProgram,
-  TrainingSession,
-  TrainingEnrollment,
-  TrainingAssessment,
-  AssessmentSubmission,
-  TrainingFeedback,
-  EmployeeCertification,
-  BiometricDevice,
-  BiometricPunch,
-  LeaveAllocation,
-  LeaveCarryForwardLog,
-  LeavePolicy,
-  FnfSettlement,  ExpenseClaim,  ExpenseClaimItem,
-  Department,
-  JobGrade,
-  Designation,
-  Notification,
-  Transfer,
-  Promotion,  OvertimeTicket,};
+          await ApprovalWorkflowStep.bulkCreate([
+            {
+              workflow_id: leaveWf.id,
+              level_order: 1,
+              level_name: "Reporting Manager Endorsement",
+              approver_type: "REPORTING_MANAGER",
+              approver_role: "manager",
+              condition_type: "ALWAYS",
+              condition_value: 0,
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 24,
+            },
+            {
+              workflow_id: leaveWf.id,
+              level_order: 2,
+              level_name: "Department Head (HOD) Approval",
+              approver_type: "HOD",
+              approver_role: "hod",
+              condition_type: "ALWAYS",
+              condition_value: 0,
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 48,
+            },
+            {
+              workflow_id: leaveWf.id,
+              level_order: 3,
+              level_name: "HR Operations Final Sanction",
+              approver_type: "ROLE",
+              approver_role: "hr",
+              condition_type: "ALWAYS",
+              condition_value: 0,
+              is_mandatory: true,
+              can_auto_skip: false,
+              sla_hours: 48,
+            },
+          ]);
+
+          // 2. Expense Claims Sequential Approval (Employee -> Reporting Manager -> HOD -> Finance -> Management)
+          const claimWf = await ApprovalWorkflow.create({
+            module: "EXPENSE_CLAIM",
+            workflow_name: "Sequential Expense & Travel Reimbursement",
+            description: "Sequential approval chain: Employee ➔ Line Manager ➔ HOD ➔ Finance Audit ➔ Management (>₹10,000)",
+            department: "ALL",
+            min_amount: 0,
+            is_active: true,
+            allow_auto_skip: true,
+            notify_on_each_step: true,
+            created_by: "System",
+          });
+
+          await ApprovalWorkflowStep.bulkCreate([
+            {
+              workflow_id: claimWf.id,
+              level_order: 1,
+              level_name: "Line Manager Verification",
+              approver_type: "REPORTING_MANAGER",
+              approver_role: "manager",
+              condition_type: "ALWAYS",
+              condition_value: 0,
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 24,
+            },
+            {
+              workflow_id: claimWf.id,
+              level_order: 2,
+              level_name: "Department Head (HOD) Clearance",
+              approver_type: "HOD",
+              approver_role: "hod",
+              condition_type: "ALWAYS",
+              condition_value: 0,
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 48,
+            },
+            {
+              workflow_id: claimWf.id,
+              level_order: 3,
+              level_name: "Finance & Accounts Audit",
+              approver_type: "ROLE",
+              approver_role: "finance",
+              condition_type: "ALWAYS",
+              condition_value: 0,
+              is_mandatory: true,
+              can_auto_skip: false,
+              sla_hours: 48,
+            },
+            {
+              workflow_id: claimWf.id,
+              level_order: 4,
+              level_name: "Executive Management Sign-Off",
+              approver_type: "ROLE",
+              approver_role: "management",
+              condition_type: "AMOUNT_GREATER_THAN",
+              condition_value: 10000,
+              is_mandatory: false,
+              can_auto_skip: false,
+              sla_hours: 72,
+            },
+          ]);
+
+          // 3. Overtime Sequential Approval
+          const otWf = await ApprovalWorkflow.create({
+            module: "OVERTIME",
+            workflow_name: "Overtime (OT) Sequential Regularization",
+            description: "Sequential OT approval: Employee ➔ Reporting Manager ➔ HOD ➔ HR",
+            department: "ALL",
+            is_active: true,
+            allow_auto_skip: true,
+            notify_on_each_step: true,
+            created_by: "System",
+          });
+
+          await ApprovalWorkflowStep.bulkCreate([
+            {
+              workflow_id: otWf.id,
+              level_order: 1,
+              level_name: "Reporting Manager Verification",
+              approver_type: "REPORTING_MANAGER",
+              approver_role: "manager",
+              condition_type: "ALWAYS",
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 24,
+            },
+            {
+              workflow_id: otWf.id,
+              level_order: 2,
+              level_name: "Department Head Approval",
+              approver_type: "HOD",
+              approver_role: "hod",
+              condition_type: "ALWAYS",
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 48,
+            },
+            {
+              workflow_id: otWf.id,
+              level_order: 3,
+              level_name: "HR Payroll Regularization",
+              approver_type: "ROLE",
+              approver_role: "hr",
+              condition_type: "ALWAYS",
+              is_mandatory: true,
+              can_auto_skip: false,
+              sla_hours: 48,
+            },
+          ]);
+
+          console.log("Default Sequential Multi-Level Approval Workflows seeded successfully.");
+        }
+
+        // Ensure LOAN approval workflow exists
+        const loanWfExists = await ApprovalWorkflow.findOne({ where: { module: "LOAN" } });
+        if (!loanWfExists) {
+          const loanWf = await ApprovalWorkflow.create({
+            module: "LOAN",
+            workflow_name: "Employee Loan & Salary Advance Sanction",
+            description: "Sequential routing: Reporting Manager ➔ HOD ➔ Finance & Accounts Sanction",
+            department: "ALL",
+            min_amount: 0,
+            is_active: true,
+            allow_auto_skip: true,
+            notify_on_each_step: true,
+            created_by: "System",
+          });
+
+          await ApprovalWorkflowStep.bulkCreate([
+            {
+              workflow_id: loanWf.id,
+              level_order: 1,
+              level_name: "Reporting Manager Recommendation",
+              approver_type: "REPORTING_MANAGER",
+              approver_role: "manager",
+              condition_type: "ALWAYS",
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 24,
+            },
+            {
+              workflow_id: loanWf.id,
+              level_order: 2,
+              level_name: "Department Head (HOD) Endorsement",
+              approver_type: "HOD",
+              approver_role: "hod",
+              condition_type: "ALWAYS",
+              is_mandatory: true,
+              can_auto_skip: true,
+              sla_hours: 48,
+            },
+            {
+              workflow_id: loanWf.id,
+              level_order: 3,
+              level_name: "Finance & Accounts Final Sanction",
+              approver_type: "ROLE",
+              approver_role: "finance",
+              condition_type: "ALWAYS",
+              is_mandatory: true,
+              can_auto_skip: false,
+              sla_hours: 48,
+            },
+          ]);
+          console.log("Loan & Salary Advance sequential approval workflow seeded.");
+        }
+      } catch (wfErr) {
+        console.warn("Could not seed default approval workflows:", wfErr.message);
+      }
+
+      console.log("PG connected...");
+    } catch (err) {
+      console.error("Postgres connection error:", err.message);
+    }
+  };
+
+  module.exports = {
+    sequelize,
+    connectDB,
+    User,
+    Employee,
+    PasswordReset,
+    Attendance,
+    Schedule,
+    Leave,
+    Resignation,
+    Payroll,
+    ITDeclaration,
+    MediclaimPolicy,
+    MediclaimClaim,
+    MediclaimHighlight,
+    MediclaimHospital,
+    KpiTemplate,
+    KpiAssignment,
+    KpiGoalItem,
+    PerformanceReview,
+    ReviewQuestionItem,
+    RecruitmentRequisition,
+    RecruitmentCandidate,
+    RecruitmentOffer,
+    Onboarding,
+    Holiday,
+    AdminTask,
+    HrEvent,
+    TrainingProgram,
+    TrainingSession,
+    TrainingEnrollment,
+    TrainingAssessment,
+    AssessmentSubmission,
+    TrainingFeedback,
+    EmployeeCertification,
+    BiometricDevice,
+    BiometricPunch,
+    LeaveAllocation,
+    LeaveCarryForwardLog,
+    LeavePolicy,
+    FnfSettlement,
+    ExpenseClaim,
+    ExpenseClaimItem,
+    Department,
+    JobGrade,
+    Designation,
+    Notification,
+    Transfer,
+    Promotion,
+    OvertimeTicket,
+    ApprovalWorkflow,
+    ApprovalWorkflowStep,
+    ApprovalRequest,
+    ApprovalRequestStep,
+    LoanAdvance,
+    LoanRepaymentLog,
+    InfoSecCampaign,
+    InfoSecAcknowledgment,
+    FeedbackCycle360,
+    FeedbackAssignment360,
+    FeedbackSummary360,
+    CandidatePreJoining,
+    AttendanceRegularization,
+  };

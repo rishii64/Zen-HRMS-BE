@@ -1448,4 +1448,77 @@ ALTER TABLE hr_events ADD COLUMN IF NOT EXISTS theme VARCHAR(50) DEFAULT 'purple
 ALTER TABLE training_programs ADD COLUMN IF NOT EXISTS company_logo_url TEXT;
 ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS company_logo_url TEXT;
 
+-- ==========================================================================
+-- TABLE: loans_advances (Salary Advances & Company Loans)
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS loans_advances (
+  id SERIAL PRIMARY KEY,
+  application_number VARCHAR(50) NOT NULL UNIQUE,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(150) NOT NULL,
+  employee_email VARCHAR(255),
+  department VARCHAR(100),
+  designation VARCHAR(100),
+  type VARCHAR(50) NOT NULL DEFAULT 'SALARY_ADVANCE',
+  principal_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  interest_rate FLOAT NOT NULL DEFAULT 0,
+  interest_type VARCHAR(50) DEFAULT 'REDUCING_BALANCE',
+  tenure_months INTEGER NOT NULL DEFAULT 1,
+  monthly_emi DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_interest DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_repayable DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  remaining_balance DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  paid_amount DECIMAL(12, 2) DEFAULT 0,
+  paid_installments INTEGER DEFAULT 0,
+  total_installments INTEGER NOT NULL DEFAULT 1,
+  purpose VARCHAR(255) NOT NULL,
+  reason_details TEXT,
+  repayment_start_month VARCHAR(20) NOT NULL,
+  status VARCHAR(50) NOT NULL DEFAULT 'PENDING_APPROVAL',
+  repayment_schedule JSONB,
+  manager_id VARCHAR(50),
+  manager_name VARCHAR(150),
+  manager_decision VARCHAR(50),
+  manager_comments TEXT,
+  manager_action_date TIMESTAMPTZ,
+  finance_id VARCHAR(50),
+  finance_name VARCHAR(150),
+  finance_decision VARCHAR(50),
+  finance_comments TEXT,
+  finance_action_date TIMESTAMPTZ,
+  disbursement_date DATE,
+  disbursement_mode VARCHAR(50) DEFAULT 'Bank Transfer',
+  disbursement_ref VARCHAR(100),
+  disbursed_by VARCHAR(150),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ==========================================================================
+-- TABLE: loan_repayment_logs (Monthly Deduction History)
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS loan_repayment_logs (
+  id SERIAL PRIMARY KEY,
+  loan_id INTEGER NOT NULL REFERENCES loans_advances(id) ON DELETE CASCADE,
+  employee_id VARCHAR(50) NOT NULL,
+  month_year VARCHAR(20) NOT NULL,
+  installment_number INTEGER NOT NULL,
+  emi_amount DECIMAL(12, 2) NOT NULL,
+  principal_component DECIMAL(12, 2) NOT NULL,
+  interest_component DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  remaining_balance_after DECIMAL(12, 2) NOT NULL,
+  payment_source VARCHAR(50) DEFAULT 'PAYROLL_DEDUCTION',
+  payroll_id INTEGER,
+  deduction_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  remarks VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_loan_emp ON loans_advances (employee_id);
+CREATE INDEX IF NOT EXISTS idx_loan_status ON loans_advances (status);
+CREATE INDEX IF NOT EXISTS idx_loan_type ON loans_advances (type);
+CREATE INDEX IF NOT EXISTS idx_repayment_loan_id ON loan_repayment_logs (loan_id);
+CREATE INDEX IF NOT EXISTS idx_repayment_emp ON loan_repayment_logs (employee_id);
+
 

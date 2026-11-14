@@ -1,4 +1,4 @@
-const { User, Employee, Payroll, Attendance, Leave, Holiday, ITDeclaration, OvertimeTicket } = require("../config/db");
+const { User, Employee, Payroll, Attendance, Leave, Holiday, ITDeclaration, OvertimeTicket, LoanAdvance, LoanRepaymentLog } = require("../config/db");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const { getISTParts } = require("../utils/timezone");
@@ -410,6 +410,47 @@ const PayrollController = {
       const empCodes = [user.employee_id, empId];
       if (emp && emp.employee_id) empCodes.push(emp.employee_id);
 
+      // Query active loans/advances for automated EMI deduction schedule
+      let activeLoansList = [];
+      let autoAdvanceEmi = 0;
+      let autoLoanEmi = 0;
+      const currentPayrollMonthStr = `${reqYear}-${String(reqMonthIdx + 1).padStart(2, "0")}`;
+
+      try {
+        activeLoansList = await LoanAdvance.findAll({
+          where: {
+            employee_id: { [Op.in]: empCodes },
+            status: { [Op.in]: ["ACTIVE", "DISBURSED"] },
+            remaining_balance: { [Op.gt]: 0 },
+          },
+          order: [["id", "ASC"]],
+        });
+
+        for (const loan of activeLoansList) {
+          if (!loan.repayment_start_month || loan.repayment_start_month <= currentPayrollMonthStr) {
+            const emiVal = parseFloat(loan.monthly_emi) || 0;
+            const remaining = parseFloat(loan.remaining_balance) || 0;
+            const deductionAmount = Math.min(emiVal, remaining);
+
+            if (loan.type === "SALARY_ADVANCE") {
+              autoAdvanceEmi += deductionAmount;
+            } else {
+              autoLoanEmi += deductionAmount;
+            }
+          }
+        }
+      } catch (loanErr) {
+        console.warn("Payroll active loans check warning:", loanErr.message);
+      }
+
+      // If active loan/advance EMIs exist, auto-populate deductions if not manually overridden
+      if (autoAdvanceEmi > 0 && advanceDeduction === 0) {
+        advanceDeduction = autoAdvanceEmi;
+      }
+      if (autoLoanEmi > 0 && loanEmi === 0) {
+        loanEmi = autoLoanEmi;
+      }
+
       // Query real attendance logs for this employee in this month
       let attendanceRecords = [];
       try {
@@ -715,6 +756,12 @@ const PayrollController = {
               Math.abs((parseFloat(savedData.statutory_deductions?.pt) || 0) - (latest_salary_structure.pt || 0)) > 1
             )
           : false,
+        active_loans: activeLoansList,
+        loan_deduction_summary: {
+          advance_deduction: advanceDeduction,
+          loan_emi: loanEmi,
+          active_loans_count: activeLoansList.length,
+        },
         saved_payroll: savedData,
         it_declaration: itDeclarationInfo,
         facilities: facilities || defaultFacilities,
@@ -784,6 +831,80 @@ const PayrollController = {
         await payroll.update(payload);
       } else {
         payroll = await Payroll.create(payload);
+      }
+
+      // Automated Loan & Salary Advance Repayment Log & Balance Update
+      if (status === "Paid" || status === "Finalized") {
+        try {
+          const parsedStat = typeof statutory_deductions === "object" ? statutory_deductions : JSON.parse(statutory_deductions || "{}");
+          const parsedAdj = typeof adjustments === "object" ? adjustments : JSON.parse(adjustments || "{}");
+          const payrollMonthStr = month_year.trim();
+
+          const activeLoans = await LoanAdvance.findAll({
+            where: {
+              employee_id: employee_id.trim(),
+              status: { [Op.in]: ["ACTIVE", "DISBURSED"] },
+              remaining_balance: { [Op.gt]: 0 },
+            },
+          });
+
+          for (const loan of activeLoans) {
+            // Check if already logged for this month and loan
+            const existingLog = await LoanRepaymentLog.findOne({
+              where: {
+                loan_id: loan.id,
+                month_year: payrollMonthStr,
+              },
+            });
+
+            if (!existingLog) {
+              const emiVal = parseFloat(loan.monthly_emi) || 0;
+              const curBal = parseFloat(loan.remaining_balance) || 0;
+              const deductAmt = Math.min(emiVal, curBal);
+
+              if (deductAmt > 0) {
+                const newBal = Math.max(0, Math.round((curBal - deductAmt) * 100) / 100);
+                const newPaid = Math.round(((parseFloat(loan.paid_amount) || 0) + deductAmt) * 100) / 100;
+                const nextInst = (loan.paid_installments || 0) + 1;
+
+                // Create repayment log
+                await LoanRepaymentLog.create({
+                  loan_id: loan.id,
+                  employee_id: loan.employee_id,
+                  month_year: payrollMonthStr,
+                  installment_number: nextInst,
+                  emi_amount: deductAmt,
+                  principal_component: deductAmt,
+                  interest_component: 0,
+                  remaining_balance_after: newBal,
+                  payment_source: "PAYROLL_DEDUCTION",
+                  payroll_id: payroll.id,
+                  deduction_date: payment_date || new Date().toISOString().split("T")[0],
+                  remarks: `Automated payroll deduction for ${payrollMonthStr} (Payroll #${payroll.id})`,
+                });
+
+                // Update schedule status if matched
+                let schedule = Array.isArray(loan.repayment_schedule) ? [...loan.repayment_schedule] : [];
+                const schedIdx = schedule.findIndex((s) => s.status === "SCHEDULED");
+                if (schedIdx !== -1) {
+                  schedule[schedIdx].status = "PAID";
+                  schedule[schedIdx].paid_date = payment_date || new Date().toISOString().split("T")[0];
+                }
+
+                const isCompleted = newBal <= 0;
+                await loan.update({
+                  remaining_balance: newBal,
+                  paid_amount: newPaid,
+                  paid_installments: nextInst,
+                  status: isCompleted ? "COMPLETED" : loan.status,
+                  repayment_schedule: schedule,
+                });
+              }
+            }
+          }
+        } catch (loanSyncErr) {
+          console.warn("Payroll loan auto-deduction sync warning:", loanSyncErr.message);
+        }
       }
 
       return res.json({
