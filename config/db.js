@@ -32,6 +32,8 @@ const Payroll = require("../model/payrollModel")(sequelize);
 const ITDeclaration = require("../model/itDeclarationModel")(sequelize);
 const MediclaimPolicy = require("../model/mediclaimModel")(sequelize);
 const MediclaimClaim = require("../model/mediclaimClaimModel")(sequelize);
+const MediclaimHighlight = require("../model/mediclaimHighlightModel")(sequelize);
+const MediclaimHospital = require("../model/mediclaimHospitalModel")(sequelize);
 const KpiTemplate = require("../model/kpiTemplateModel")(sequelize);
 const KpiAssignment = require("../model/kpiAssignmentModel")(sequelize);
 const KpiGoalItem = require("../model/kpiGoalItemModel")(sequelize);
@@ -483,6 +485,31 @@ const connectDB = async () => {
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS mediclaim_highlights (
+          id SERIAL PRIMARY KEY,
+          title VARCHAR(255) NOT NULL,
+          badge VARCHAR(100) NOT NULL DEFAULT 'Included',
+          badge_color VARCHAR(50) NOT NULL DEFAULT 'emerald',
+          description TEXT NOT NULL,
+          icon VARCHAR(50) NOT NULL DEFAULT 'shield',
+          order_index INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS mediclaim_hospitals (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          city VARCHAR(150) NOT NULL,
+          area VARCHAR(255),
+          address TEXT,
+          helpline VARCHAR(100) DEFAULT '+91 1800 425 9449',
+          cashless BOOLEAN NOT NULL DEFAULT TRUE,
+          hospital_type VARCHAR(100) NOT NULL DEFAULT 'Multi Specialty',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
       `);
     } catch (migErr) {
       console.warn("Schema initialization check note:", migErr.message);
@@ -803,6 +830,8 @@ module.exports = {
   ITDeclaration,
   MediclaimPolicy,
   MediclaimClaim,
+  MediclaimHighlight,
+  MediclaimHospital,
   KpiTemplate,
   KpiAssignment,
   KpiGoalItem,

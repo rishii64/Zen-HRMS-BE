@@ -541,8 +541,8 @@ const AttendanceController = {
 
       return res.json({
         success: true,
-        checkedIn: !!record?.check_in,
-        checkedOut: !!record?.check_out,
+        checkedIn: !!(record?.check_in && record.check_in !== "—"),
+        checkedOut: !!(record?.check_out && record.check_out !== "—"),
         record: plainRecord,
         schedule: schedule || null,
       });
@@ -637,6 +637,7 @@ const AttendanceController = {
           { date: { [Op.or]: [today, utcToday] } }
         ]
       },
+      order: [["id", "DESC"]]
     });
 
     if (!record || !record.check_in || record.check_in === "—") {
@@ -648,11 +649,19 @@ const AttendanceController = {
       return { success: true, message: "Already checked out today", record: responseRecord, alreadyCheckedOut: true };
     }
 
-    // Calculate work hours using IST timestamps
-    const inDate = new Date(`${record.date}T${record.check_in}+05:30`);
-    const outDate = new Date(`${today}T${timeStr}+05:30`);
-    const diffMs = Math.max(0, outDate - inDate);
-    const diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+    // Calculate work hours using IST timestamps safely
+    let diffHrs = 0;
+    try {
+      const recDateStr = typeof record.date === "string"
+        ? record.date.split("T")[0]
+        : (record.date instanceof Date ? record.date.toISOString().split("T")[0] : today);
+      const inDate = new Date(`${recDateStr}T${record.check_in}+05:30`);
+      const outDate = new Date(`${today}T${timeStr}+05:30`);
+      if (!isNaN(inDate.getTime()) && !isNaN(outDate.getTime())) {
+        const diffMs = Math.max(0, outDate - inDate);
+        diffHrs = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+      }
+    } catch (_) {}
 
     await record.update({
       check_out: timeStr,
@@ -671,7 +680,10 @@ const AttendanceController = {
   // POST /api/auth/attendance/check-in
   async checkIn(req, res) {
     try {
-      const { employee_id } = req.user;
+      const employee_id = req.user?.employee_id || req.user?.employee_code;
+      if (!employee_id) {
+        return res.status(400).json({ error: "Employee identifier missing from session" });
+      }
       const result = await AttendanceController.performAutoCheckIn(employee_id);
       if (!result) {
         return res.status(404).json({ error: "User profile not found" });
@@ -686,7 +698,10 @@ const AttendanceController = {
   // POST /api/auth/attendance/check-out
   async checkOut(req, res) {
     try {
-      const { employee_id } = req.user;
+      const employee_id = req.user?.employee_id || req.user?.employee_code;
+      if (!employee_id) {
+        return res.status(400).json({ error: "Employee identifier missing from session" });
+      }
       const result = await AttendanceController.performAutoCheckOut(employee_id);
       if (!result) {
         return res.status(404).json({ error: "User profile not found" });
