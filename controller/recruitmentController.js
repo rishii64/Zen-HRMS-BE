@@ -2,16 +2,75 @@ const { RecruitmentRequisition, RecruitmentCandidate, User } = require("../confi
 const { Op } = require("sequelize");
 const { sendInterviewScheduleEmail } = require("../utils/mailer");
 
+const isChroOrVpHr = (user = {}) => {
+  if (!user) return false;
+  const desig = (user?.designation || "").toLowerCase().trim();
+  const role = (user?.role || "").toLowerCase().trim();
+  const dept = (user?.dept || "").toLowerCase().trim();
+
+  // CHRO / VP HR designation match
+  if (
+    /\b(chro|vp hr|vp-hr|vp - hr)\b/i.test(desig) ||
+    desig.includes("chief human resources officer") ||
+    desig.includes("head of hr") ||
+    desig.includes("hr head") ||
+    desig.includes("vice president hr") ||
+    desig.includes("vice president - hr") ||
+    desig.includes("vice president human resources")
+  ) {
+    return true;
+  }
+
+  // System roles
+  if (["chro", "vphr", "admin", "management", "ceo", "coo"].includes(role)) {
+    return true;
+  }
+
+  // High-ranking HR leader (Rank 11 in HR department)
+  if ((dept.includes("human resource") || dept === "hr") && user?.rank_level >= 11) {
+    return true;
+  }
+
+  return false;
+};
+
+const isGeneralManagerHr = (user = {}) => {
+  if (!user) return false;
+  const desig = (user?.designation || "").toLowerCase().trim();
+  const role = (user?.role || "").toLowerCase().trim();
+  const dept = (user?.dept || "").toLowerCase().trim();
+  const isHrDept = dept.includes("human resource") || dept === "hr";
+
+  if (isHrDept) {
+    if (
+      desig.includes("general manager - hr") ||
+      desig.includes("general manager hr") ||
+      /\b(gm-hr|gm - hr)\b/i.test(desig) ||
+      (desig.includes("general manager") && !desig.includes("assistant") && !desig.includes("deputy")) ||
+      user?.rank_level === 10
+    ) {
+      return true;
+    }
+  }
+
+  if (role === "gm_hr" || role === "gmhr") return true;
+  return false;
+};
+
 const isDepartmentLeaderUser = (user = {}) => {
   const role = (user?.role || "").toLowerCase().trim();
-  if (role === "hod" || role === "manager" || role === "teamlead") return true;
+  if (role === "hod" || role === "manager" || role === "teamlead" || role === "chro" || role === "vphr") return true;
+  if (user?.is_hod || user?.is_hod_role || (user?.rank_level && user.rank_level >= 6)) return true;
   const desig = (user?.designation || "").toLowerCase().trim();
   return (
-    /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor)\b/i.test(desig) ||
+    /\b(hod|head|manager|mgr|lead|tl|agm|dgm|gm|director|supervisor|chro|vp|cfo|coo|cto)\b/i.test(desig) ||
     desig.includes("team lead") ||
     desig.includes("tech lead") ||
     desig.includes("department head") ||
-    desig.includes("head of")
+    desig.includes("head of") ||
+    desig.includes("general manager") ||
+    desig.includes("assistant general manager") ||
+    desig.includes("deputy general manager")
   );
 };
 
@@ -131,13 +190,22 @@ const RecruitmentController = {
       const userInfo = await resolveUserInfo(req.user, req.body);
       const dept = (department && department.trim()) || userInfo.dept || "General";
 
-      // If unbudgeted, require CEO/COO approval
-      const budget_approval_status = budgeted
-        ? "NOT_REQUIRED"
-        : approval_document_url
-        ? "APPROVED_BY_CEO"
-        : "PENDING_CEO_COO";
-      const status = budgeted || approval_document_url ? "SOURCING_CANDIDATES" : "PENDING_CEO_COO_APPROVAL";
+      // All requisitions raised by HODs route to Requisition Hub for CHRO / VP HR finalization
+      let budget_approval_status = "NOT_REQUIRED";
+      let status = "PENDING_CHRO_APPROVAL";
+      let finalization_status = "PENDING_CHRO";
+
+      if (!budgeted) {
+        if (approval_document_url) {
+          budget_approval_status = "APPROVED_BY_CEO";
+          status = "PENDING_CHRO_APPROVAL";
+          finalization_status = "PENDING_CHRO";
+        } else {
+          budget_approval_status = "PENDING_CEO_COO";
+          status = "PENDING_CEO_COO_APPROVAL";
+          finalization_status = "PENDING_CEO_APPROVAL";
+        }
+      }
 
       const requisition = await RecruitmentRequisition.create({
         requisition_code,
@@ -163,13 +231,14 @@ const RecruitmentController = {
         hod_name: userInfo.name,
         hod_email: userInfo.email,
         status,
+        finalization_status,
       });
 
       return res.status(201).json({
         success: true,
-        message: budgeted
-          ? "Requisition submitted successfully. HR can now source candidate resumes."
-          : "Non-budgeted requisition submitted with CEO/COO approval document attached. HR can now proceed with sourcing.",
+        message: budgeted || approval_document_url
+          ? "Requisition submitted successfully and reflected in Requisitions Hub. Awaiting finalization by CHRO / VP HR."
+          : "Non-budgeted requisition submitted. Awaiting CEO/COO budget approval, after which CHRO / VP HR will finalize.",
         data: requisition,
       });
     } catch (err) {
@@ -189,12 +258,21 @@ const RecruitmentController = {
       const whereClause = {};
 
       // Role based filtering:
-      // If HOD / Department Leader, show requisitions from their department or raised by them
-      const isExecutiveOrHr = ["hr", "admin", "ceo", "coo", "hrmanager"].includes((role || "").toLowerCase());
+      // If Executive / HR / CHRO, show all requisitions across all departments
+      const isExecutiveOrHr =
+        ["hr", "admin", "ceo", "coo", "hrmanager", "chro", "vphr", "management"].includes((role || "").toLowerCase()) ||
+        isChroOrVpHr(req.user) ||
+        isGeneralManagerHr(req.user);
+
       if (!isExecutiveOrHr && isDepartmentLeaderUser(req.user)) {
+        const userDeptName = dept || "";
+        const deptPrefix = userDeptName.split("/")[0].split("&")[0].trim();
         whereClause[Op.or] = [
           { hod_id: employee_id },
-          { department: dept || "IT" },
+          ...(userDeptName ? [
+            { department: userDeptName },
+            ...(deptPrefix ? [{ department: { [Op.iLike]: `%${deptPrefix}%` } }] : [])
+          ] : [])
         ];
       }
 
@@ -378,7 +456,167 @@ const RecruitmentController = {
   /**
    * CEO / COO / Admin approves or rejects the unbudgeted requisition
    */
-  async approveRejectBudget(req, res) {
+    /**
+   * CHRO / VP HR finalizes the requisition for candidate sourcing
+   */
+  /**
+   * CHRO / VP HR assigns General Manager - HR to review and finalize this requisition
+   */
+  async delegateFinalizer(req, res) {
+    try {
+      const { id } = req.params;
+      const { delegated_finalizer_id, delegated_finalizer_name, notes } = req.body;
+
+      if (!isChroOrVpHr(req.user)) {
+        return res.status(403).json({
+          error: "Access denied. Only the CHRO / VP HR can assign or delegate finalization authority to General Manager - HR.",
+        });
+      }
+
+      const requisition = await RecruitmentRequisition.findByPk(id);
+      if (!requisition) {
+        return res.status(404).json({ error: "Requisition not found" });
+      }
+
+      requisition.delegated_finalizer_id = delegated_finalizer_id || "HR-GM-01";
+      requisition.delegated_finalizer_name = delegated_finalizer_name || "General Manager - HR";
+      requisition.delegated_at = new Date();
+      if (notes) {
+        requisition.chro_comments = notes;
+      }
+
+      await requisition.save();
+
+      return res.json({
+        success: true,
+        message: `Requisition successfully assigned to ${requisition.delegated_finalizer_name} for finalization!`,
+        data: requisition,
+      });
+    } catch (err) {
+      console.error("Delegate finalizer error:", err);
+      return res.status(500).json({ error: "Failed to delegate finalizer: " + err.message });
+    }
+  },
+
+  /**
+   * Get eligible General Managers in HR who can be assigned by CHRO
+   */
+  async getEligibleFinalizers(req, res) {
+    try {
+      const { Designation: DesigModel, JobGrade: GradeModel } = require("../config/db");
+      const hrUsers = await User.findAll({
+        where: {
+          [Op.or]: [
+            { dept: { [Op.iLike]: "%HR%" } },
+            { dept: { [Op.iLike]: "%Human Resource%" } }
+          ],
+          is_active: true
+        },
+        attributes: ["id", "employee_id", "name", "email", "designation", "dept", "role", "grade_id"],
+        include: [
+          { model: DesigModel, as: "designationProfile", required: false },
+          { model: GradeModel, as: "gradeProfile", required: false }
+        ]
+      });
+
+      const gmHrCandidates = hrUsers.filter(u => {
+        const d = (u.designation || "").toLowerCase();
+        const rank = u.gradeProfile?.rank_level || u.rank_level || 0;
+        return d.includes("general manager") || rank === 10 || d.includes("gm-hr") || d.includes("gm - hr");
+      });
+
+      let candidatesList = gmHrCandidates.map(u => ({
+        id: u.employee_id,
+        name: u.name,
+        designation: u.designation || "General Manager - HR",
+        dept: u.dept,
+        email: u.email
+      }));
+
+      if (candidatesList.length === 0) {
+        candidatesList.push({
+          id: "HR-GM-01",
+          name: "Mr. Rajesh Sharma",
+          designation: "General Manager - HR",
+          dept: "Human Resources (HR)",
+          email: "rajesh.gmhr@company.com"
+        });
+      }
+
+      return res.json({ success: true, data: candidatesList });
+    } catch (err) {
+      console.error("Get eligible finalizers error:", err);
+      return res.status(500).json({ error: "Failed to fetch eligible finalizers: " + err.message });
+    }
+  },
+
+  /**
+   * CHRO / VP HR (or assigned General Manager - HR) finalizes the requisition for candidate sourcing
+   */
+  async finalizeRequisition(req, res) {
+    try {
+      const { id } = req.params;
+      const { action = "APPROVE_AND_FINALIZE", comments } = req.body;
+
+      const requisition = await RecruitmentRequisition.findByPk(id);
+      if (!requisition) {
+        return res.status(404).json({ error: "Requisition not found" });
+      }
+
+      const isChro = isChroOrVpHr(req.user);
+      const isGmHr = isGeneralManagerHr(req.user);
+      const isDelegatedFinalizer = requisition.delegated_finalizer_id && (
+        requisition.delegated_finalizer_id.toLowerCase() === (req.user.employee_id || "").toLowerCase() ||
+        isGmHr
+      );
+
+      if (!isChro && !isDelegatedFinalizer) {
+        return res.status(403).json({
+          error: "Access denied. Only the CHRO / VP HR or the assigned General Manager - HR can finalize this requisition.",
+        });
+      }
+
+      const approverInfo = await resolveUserInfo(req.user, req.body);
+      const approverName = approverInfo.name || req.user.name || (isChro ? "CHRO / VP HR" : "General Manager - HR");
+      const approverRole = isChro ? "CHRO / VP HR" : "General Manager - HR (Delegated)";
+
+      if (action === "APPROVE_AND_FINALIZE" || action === "APPROVE") {
+        requisition.status = "SOURCING_CANDIDATES";
+        requisition.finalization_status = isChro ? "FINALIZED_BY_CHRO" : "FINALIZED_BY_GM_HR";
+        requisition.finalized_by_id = req.user.employee_id;
+        requisition.finalized_by_name = approverName;
+        requisition.finalized_by_role = approverRole;
+        requisition.finalized_at = new Date();
+        requisition.chro_comments = comments || `Requisition finalized and approved for workforce sourcing by ${approverRole}.`;
+      } else if (action === "REJECT") {
+        requisition.status = "REJECTED";
+        requisition.finalization_status = isChro ? "REJECTED_BY_CHRO" : "REJECTED_BY_GM_HR";
+        requisition.finalized_by_id = req.user.employee_id;
+        requisition.finalized_by_name = approverName;
+        requisition.finalized_by_role = approverRole;
+        requisition.finalized_at = new Date();
+        requisition.chro_comments = comments || `Requisition rejected by ${approverRole}.`;
+      } else {
+        return res.status(400).json({ error: "Invalid action. Must be APPROVE_AND_FINALIZE or REJECT." });
+      }
+
+      await requisition.save();
+
+      return res.json({
+        success: true,
+        message:
+          action === "REJECT"
+            ? `Requisition rejected by ${approverRole}.`
+            : `Requisition successfully finalized and approved by ${approverRole}! HR recruiters can now source candidate resumes.`,
+        data: requisition,
+      });
+    } catch (err) {
+      console.error("Finalize requisition error:", err);
+      return res.status(500).json({ error: "Failed to finalize requisition: " + err.message });
+    }
+  },
+
+async approveRejectBudget(req, res) {
     try {
       const { id } = req.params;
       const { action, comments } = req.body; // action: "APPROVED" or "REJECTED"
@@ -394,7 +632,8 @@ const RecruitmentController = {
 
       if (action === "APPROVED") {
         requisition.budget_approval_status = "APPROVED_BY_CEO";
-        requisition.status = "SOURCING_CANDIDATES"; // HR can now start sourcing candidate resumes
+        requisition.status = "PENDING_CHRO_APPROVAL"; // Routed to CHRO / VP HR for finalization
+        requisition.finalization_status = "PENDING_CHRO";
         requisition.ceo_coo_approver_id = req.user.employee_id;
         requisition.ceo_coo_approver_name = approverName;
         requisition.ceo_coo_approver_role = approverRole;
@@ -468,6 +707,13 @@ const RecruitmentController = {
       if (!requisition.is_budgeted && requisition.budget_approval_status !== "APPROVED_BY_CEO") {
         return res.status(400).json({
           error: "This unbudgeted requisition has not been approved by CEO/COO yet. Sourcing is blocked until approval.",
+        });
+      }
+
+      // Check if awaiting CHRO finalization
+      if (requisition.status === "PENDING_CHRO_APPROVAL" || requisition.finalization_status === "PENDING_CHRO") {
+        return res.status(400).json({
+          error: "This requisition is awaiting finalization by the CHRO / VP HR. Sourcing candidate resumes is blocked until finalized.",
         });
       }
 
@@ -1022,6 +1268,9 @@ const RecruitmentController = {
       }
 
       const totalRequisitions = await RecruitmentRequisition.count({ where: reqWhere });
+      const pendingChroFinalization = await RecruitmentRequisition.count({
+        where: { ...reqWhere, status: "PENDING_CHRO_APPROVAL" },
+      });
       const pendingApproval = await RecruitmentRequisition.count({
         where: { ...reqWhere, status: "PENDING_CEO_COO_APPROVAL" },
       });
@@ -1059,6 +1308,7 @@ const RecruitmentController = {
         success: true,
         data: {
           totalRequisitions,
+          pendingChroFinalization,
           pendingApproval,
           activeSourcing,
           inHodReview,

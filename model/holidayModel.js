@@ -32,12 +32,22 @@ module.exports = (sequelize) => {
       type: {
         type: DataTypes.STRING(50),
         allowNull: false,
-        defaultValue: "Public", // Public, National, Festival, Company, Gazetted, Optional
+        defaultValue: "Public", // Public, National, Festival, Company, Gazetted, Optional, Working Day
+      },
+      is_working_day: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
       },
       dept: {
         type: DataTypes.STRING(100),
         allowNull: false,
         defaultValue: "All",
+      },
+      branch_location: {
+        type: DataTypes.STRING(120),
+        allowNull: false,
+        defaultValue: "All", // "All", "Kolkata", "Mumbai", "Bengaluru", "Delhi NCR", "Odisha", "International - Dubai", "International - London", etc.
       },
       created_by: {
         type: DataTypes.STRING(100),

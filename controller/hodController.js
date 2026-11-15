@@ -1,4 +1,4 @@
-const { User, Employee, Leave, Attendance } = require("../config/db");
+const { User, Employee, Leave, Attendance, Department } = require("../config/db");
 const { Op } = require("sequelize");
 const { getISTDateStr } = require("../utils/timezone");
 
@@ -15,13 +15,27 @@ const HODController = {
       }
 
       let userDept = user.dept;
+      try {
+        const headDept = await Department.findOne({
+          where: {
+            [Op.or]: [
+              { hod_employee_id: employee_id },
+              user.department_id ? { id: user.department_id } : null
+            ].filter(Boolean)
+          }
+        });
+        if (headDept && headDept.dept_name) {
+          userDept = headDept.dept_name;
+        }
+      } catch (_) {}
+
       if (!userDept || userDept === "Other" || userDept === "General") {
         const emp = await Employee.findOne({ where: { employee_id } });
         if (emp && emp.dept) {
           userDept = emp.dept;
         }
       }
-      if (!userDept) userDept = "Design";
+      if (!userDept) userDept = "Engineering / Tech";
 
       const todayStr = getISTDateStr();
 

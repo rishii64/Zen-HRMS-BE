@@ -127,6 +127,45 @@ module.exports = (sequelize) => {
         type: DataTypes.TEXT,
         allowNull: true,
       },
+      // CHRO / VP HR Finalization Workflow
+      finalization_status: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        defaultValue: "PENDING_CHRO", // "PENDING_CHRO", "FINALIZED_BY_CHRO", "REJECTED_BY_CHRO"
+      },
+      finalized_by_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      finalized_by_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
+      finalized_by_role: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      finalized_at: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      chro_comments: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      // CHRO delegation — CHRO can assign GM-HR as delegated finalizer
+      delegated_finalizer_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      delegated_finalizer_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+      },
+      delegated_at: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
       // Overall Status
       // "PENDING_CEO_COO_APPROVAL" | "SOURCING_CANDIDATES" | "HOD_REVIEW" | "INTERVIEWS_IN_PROGRESS" | "CLOSED" | "REJECTED"
       status: {

@@ -531,10 +531,284 @@ const sendHREventAnnouncementEmail = async ({
   }
 };
 
+const sendMail = async ({ to, subject, html, attachments = [] }) => {
+  const mailOptions = {
+    from: `"HR Department - Zentelex" <${process.env.SMTP_MAIL || "recruitment@zentelex.com"}>`,
+    to: (to || "").toLowerCase().trim(),
+    subject,
+    html,
+    attachments,
+  };
+
+  try {
+    return await transporter.sendMail(mailOptions);
+  } catch (err) {
+    console.error("Nodemailer generic sendMail error:", err.message);
+    throw err;
+  }
+};
+
+
+const sendPolicyRenewalEmail = async ({
+  to,
+  employeeName,
+  employeeId,
+  policyNumber,
+  tpaName,
+  insuranceCompany,
+  sumInsured,
+  policyEndDate,
+  daysRemaining,
+  reminderInterval = 30,
+  renewalPortalUrl,
+}) => {
+  const portalUrl = renewalPortalUrl || `${process.env.FRONTEND_URL || "http://localhost:5173"}/mediclaim`;
+  const formattedSum = typeof sumInsured === "number" ? sumInsured.toLocaleString("en-IN") : sumInsured;
+
+  let headerColor = "#4f46e5";
+  let alertBadgeText = "30-Day Advance Renewal Notice";
+  let alertBadgeBg = "#e0e7ff";
+  let alertBadgeColor = "#3730a3";
+  let urgencyHeadline = "Your group mediclaim policy is due for annual renewal";
+
+  if (reminderInterval <= 7) {
+    headerColor = "#dc2626";
+    alertBadgeText = "CRITICAL: 7 Days Until Expiry";
+    alertBadgeBg = "#fee2e2";
+    alertBadgeColor = "#991b1b";
+    urgencyHeadline = "Immediate action required: Group mediclaim policy expires in 7 days";
+  } else if (reminderInterval <= 15) {
+    headerColor = "#d97706";
+    alertBadgeText = "Action Required: 15 Days Left";
+    alertBadgeBg = "#fef3c7";
+    alertBadgeColor = "#92400e";
+    urgencyHeadline = "Group health insurance renewal window is closing soon";
+  }
+
+  const subject = `[Policy Renewal Reminder] ${alertBadgeText} - Policy #${policyNumber} (${employeeName || employeeId})`;
+
+  const mailOptions = {
+    from: `"Zentelex Corporate Benefits" <${process.env.SMTP_MAIL || "recruitment@zentelex.com"}>`,
+    to: (to || "").toLowerCase().trim(),
+    subject,
+    html: `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 620px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+        <div style="background-color: ${headerColor}; padding: 24px 28px; color: #ffffff;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.85);">
+              Zentelex HRMS &bull; Corporate Health Desk
+            </span>
+          </div>
+          <h2 style="margin: 12px 0 4px 0; font-size: 20px; font-weight: 700; color: #ffffff;">
+            Group Mediclaim Policy Renewal
+          </h2>
+          <p style="margin: 0; font-size: 13px; color: rgba(255,255,255,0.9);">
+            ${urgencyHeadline}
+          </p>
+        </div>
+
+        <div style="padding: 24px 28px;">
+          <div style="margin-bottom: 18px;">
+            <span style="background-color: ${alertBadgeBg}; color: ${alertBadgeColor}; padding: 5px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+              ${alertBadgeText}
+            </span>
+            <span style="float: right; font-size: 13px; font-weight: 600; color: ${headerColor};">
+              ${daysRemaining} Days Remaining
+            </span>
+            <div style="clear: both;"></div>
+          </div>
+
+          <p style="font-size: 14px; line-height: 1.6; color: #334155; margin-top: 0;">
+            Dear <strong>${employeeName || "Employee"}</strong> (${employeeId}),
+          </p>
+          <p style="font-size: 13px; line-height: 1.6; color: #475569;">
+            This is an automated notification from the <strong>Corporate Health & Benefits Administration Desk</strong>.
+            Your group corporate mediclaim policy coverage is scheduled to expire on <strong>${policyEndDate}</strong>.
+          </p>
+
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; margin: 20px 0;">
+            <div style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">
+              Policy & Coverage Summary
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 40%;">Policy Number:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 600; font-family: monospace;">${policyNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Insurer & TPA:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${insuranceCompany || "ICICI Lombard GIC Ltd"} / ${tpaName || "Medi Assist"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Sum Insured:</td>
+                <td style="padding: 6px 0; color: #059669; font-weight: 700;">₹${formattedSum || "5,00,000"} (Floater)</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Current Validity Till:</td>
+                <td style="padding: 6px 0; color: #b91c1c; font-weight: 700;">${policyEndDate}</td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="background-color: #f1f5f9; border-left: 4px solid ${headerColor}; padding: 12px 16px; border-radius: 6px; margin-bottom: 24px; font-size: 12px; line-height: 1.6; color: #334155;">
+            <strong>Important Action Items:</strong>
+            <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+              <li>Verify that all your enrolled family dependents and nominee information are up to date.</li>
+              <li>Group policy renewal is managed in coordination with Corporate HR and the Underwriter.</li>
+              <li>If you have pending reimbursement claims, please ensure they are submitted before the cutoff date.</li>
+            </ul>
+          </div>
+
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${portalUrl}" style="background-color: ${headerColor}; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 13px; display: inline-block; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+              View Mediclaim Portal & E-Card &rarr;
+            </a>
+          </div>
+
+          <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+            For policy modifications or questions, reach out to Corporate HR at <a href="mailto:hr@zentelex.com" style="color: ${headerColor}; text-decoration: none;">hr@zentelex.com</a>.
+          </p>
+        </div>
+
+        <div style="background-color: #0f172a; padding: 14px 28px; text-align: center; font-size: 11px; color: #94a3b8;">
+          &copy; 2026 Zentelex HRMS &bull; Corporate Benefits & Statutory Insurance Operations
+        </div>
+      </div>
+    `
+  };
+
+  try {
+    return await transporter.sendMail(mailOptions);
+  } catch (err) {
+    console.error(`Nodemailer sendPolicyRenewalEmail (${reminderInterval}d) error:`, err.message);
+    return null;
+  }
+};
+
+
+const sendInfoSecCampaignEmail = async ({
+  to,
+  employeeName,
+  employeeId,
+  campaignTitle,
+  campaignCategory,
+  deadline,
+  daysRemaining,
+  isReminder = false,
+  portalUrl,
+}) => {
+  const url = portalUrl || `${process.env.FRONTEND_URL || "http://localhost:5173"}/infosec`;
+  const subjectPrefix = isReminder ? "[REMINDER] Mandatory InfoSec Acknowledgment Required" : "[ACTION REQUIRED] New InfoSec Awareness Campaign Launched";
+  const subject = `${subjectPrefix} - ${campaignTitle}`;
+
+  const headerBg = isReminder ? "#b91c1c" : "#0f172a";
+  const badgeText = isReminder ? `DEADLINE EXPIRING IN ${daysRemaining || 3} DAYS` : "ANNUAL CYBERSECURITY COMPLIANCE";
+
+  const mailOptions = {
+    from: `"Zentelex InfoSec Compliance Desk" <${process.env.SMTP_MAIL || "recruitment@zentelex.com"}>`,
+    to: (to || "").toLowerCase().trim(),
+    subject,
+    html: `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 620px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+        <div style="background-color: ${headerBg}; padding: 24px 28px; color: #ffffff;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #38bdf8;">
+              🛡️ Zentelex InfoSec Compliance Desk
+            </span>
+          </div>
+          <h2 style="margin: 12px 0 4px 0; font-size: 20px; font-weight: 700; color: #ffffff;">
+            ${isReminder ? "Cybersecurity Acknowledgment Reminder" : "Information Security Awareness Campaign"}
+          </h2>
+          <p style="margin: 0; font-size: 13px; color: rgba(255,255,255,0.85);">
+            ISO 27001 & SOC 2 Annual Information Security Compliance Mandate
+          </p>
+        </div>
+
+        <div style="padding: 24px 28px;">
+          <div style="margin-bottom: 18px;">
+            <span style="background-color: ${isReminder ? '#fee2e2' : '#f0fdf4'}; color: ${isReminder ? '#991b1b' : '#166534'}; padding: 5px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+              ${badgeText}
+            </span>
+            <span style="float: right; font-size: 12px; font-weight: 600; color: #64748b;">
+              Deadline: <strong>${deadline}</strong>
+            </span>
+            <div style="clear: both;"></div>
+          </div>
+
+          <p style="font-size: 14px; line-height: 1.6; color: #334155; margin-top: 0;">
+            Dear <strong>${employeeName || "Employee"}</strong> (${employeeId}),
+          </p>
+          <p style="font-size: 13px; line-height: 1.6; color: #475569;">
+            As part of our periodic Information Security governance, all personnel are required to complete the mandatory awareness training and sign the digital security compliance acknowledgment.
+          </p>
+
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; margin: 20px 0;">
+            <div style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">
+              Campaign Overview
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 38%;">Campaign:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${campaignTitle}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Category:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 600;">${campaignCategory || "Phishing & Social Engineering"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Completion Time:</td>
+                <td style="padding: 6px 0; color: #0f172a;">~10–15 Minutes (Self-Paced)</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Compliance Deadline:</td>
+                <td style="padding: 6px 0; color: #b91c1c; font-weight: 700;">${deadline}</td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="background-color: #f0f9ff; border-left: 4px solid #0284c7; padding: 12px 16px; border-radius: 6px; margin-bottom: 24px; font-size: 12px; line-height: 1.6; color: #0369a1;">
+            <strong>Module Checklist:</strong>
+            <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+              <li>Review the latest spear-phishing and social engineering attack patterns.</li>
+              <li>Inspect real-world attack breakdowns and spot the red flags.</li>
+              <li>Pass the 5-question micro-knowledge check (80% passing threshold).</li>
+              <li>Digitally sign your annual InfoSec & Clean Desk compliance declaration.</li>
+            </ul>
+          </div>
+
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${url}" style="background-color: #0f172a; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 8px; font-weight: 700; font-size: 13px; display: inline-block; box-shadow: 0 2px 6px rgba(0,0,0,0.15);">
+              Complete InfoSec Training & Acknowledgment &rarr;
+            </a>
+          </div>
+
+          <p style="font-size: 11px; color: #94a3b8; text-align: center; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+            For cybersecurity concerns or to report a phishing attempt, email <a href="mailto:security@zentelex.com" style="color: #0284c7; text-decoration: none;">security@zentelex.com</a>.
+          </p>
+        </div>
+
+        <div style="background-color: #0b0f19; padding: 14px 28px; text-align: center; font-size: 11px; color: #94a3b8;">
+          &copy; 2026 Zentelex HRMS &bull; Information Security & IT Governance
+        </div>
+      </div>
+    `
+  };
+
+  try {
+    return await transporter.sendMail(mailOptions);
+  } catch (err) {
+    console.error("Nodemailer sendInfoSecCampaignEmail error:", err.message);
+    return null;
+  }
+};
+
 module.exports = {
+  transporter,
+  sendMail,
   sendOTPEmail,
   sendCredentialsEmail,
   sendInterviewScheduleEmail,
   sendHREventAnnouncementEmail,
+  sendPolicyRenewalEmail,
+  sendInfoSecCampaignEmail,
 };
-

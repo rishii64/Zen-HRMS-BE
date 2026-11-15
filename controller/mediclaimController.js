@@ -8,6 +8,8 @@ const {
   sequelize
 } = require("../config/db");
 const { Op } = require("sequelize");
+const { checkAndTriggerPolicyRenewalReminders } = require("../services/policyRenewalScheduler");
+const { sendRealtimeNotification } = require("../socket");
 
 const DEFAULT_HIGHLIGHTS = [
   {
@@ -888,6 +890,184 @@ const MediclaimController = {
     } catch (err) {
       console.error("getEmployeesCoverage error:", err);
       return res.status(500).json({ success: false, error: "Failed to retrieve employee coverage details" });
+    }
+  },
+  /**
+   * getRenewalStatus
+   * Returns list and metric summaries of upcoming policy renewals (30d, 15d, 7d intervals, expired, and healthy)
+   */
+  getRenewalStatus: async (req, res) => {
+    try {
+      const policies = await MediclaimPolicy.findAll({
+        order: [["policy_end_date", "ASC"]],
+      });
+
+      const employees = await Employee.findAll({
+        attributes: ["employee_id", "first_name", "last_name", "email", "work_email", "dept", "designation", "profile_photo"],
+      });
+      const employeeMap = {};
+      employees.forEach((e) => {
+        employeeMap[e.employee_id] = e;
+      });
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const items = policies.map((pol) => {
+        let daysRemaining = null;
+        let urgency = "healthy";
+
+        if (pol.policy_end_date) {
+          const endDate = new Date(pol.policy_end_date);
+          endDate.setHours(0, 0, 0, 0);
+          const diffMs = endDate.getTime() - today.getTime();
+          daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+          if (daysRemaining < 0) {
+            urgency = "expired";
+          } else if (daysRemaining <= 7) {
+            urgency = "critical_7d";
+          } else if (daysRemaining <= 15) {
+            urgency = "warning_15d";
+          } else if (daysRemaining <= 30) {
+            urgency = "notice_30d";
+          } else {
+            urgency = "healthy";
+          }
+        }
+
+        const emp = employeeMap[pol.employee_id];
+        return {
+          id: pol.id,
+          employee_id: pol.employee_id,
+          employee_name: emp ? `${emp.first_name || ""} ${emp.last_name || ""}`.trim() : pol.employee_id,
+          email: emp?.email || emp?.work_email || "",
+          department: emp?.dept || "General",
+          designation: emp?.designation || "Staff",
+          profile_photo: emp?.profile_photo || "",
+          policy_number: pol.policy_number,
+          tpa_name: pol.tpa_name,
+          insurance_company: pol.insurance_company,
+          policy_start_date: pol.policy_start_date,
+          policy_end_date: pol.policy_end_date,
+          sum_insured: parseFloat(pol.sum_insured || 500000),
+          plan_type: pol.plan_type,
+          status: pol.status,
+          days_remaining: daysRemaining,
+          urgency,
+          renewal_reminder_30d_sent: pol.renewal_reminder_30d_sent || false,
+          renewal_reminder_15d_sent: pol.renewal_reminder_15d_sent || false,
+          renewal_reminder_7d_sent: pol.renewal_reminder_7d_sent || false,
+          last_renewal_reminder_date: pol.last_renewal_reminder_date,
+          renewal_notes: pol.renewal_notes || "",
+        };
+      });
+
+      const metrics = {
+        total: items.length,
+        critical_7d: items.filter((i) => i.urgency === "critical_7d").length,
+        warning_15d: items.filter((i) => i.urgency === "warning_15d").length,
+        notice_30d: items.filter((i) => i.urgency === "notice_30d").length,
+        expired: items.filter((i) => i.urgency === "expired").length,
+        healthy: items.filter((i) => i.urgency === "healthy").length,
+      };
+
+      return res.json({
+        success: true,
+        metrics,
+        policies: items,
+      });
+    } catch (err) {
+      console.error("getRenewalStatus error:", err);
+      return res.status(500).json({ success: false, error: "Failed to fetch policy renewal status" });
+    }
+  },
+
+  /**
+   * triggerRenewalReminders
+   * Manually executes the scheduled expiry reminder routine and returns dispatched stats
+   */
+  triggerRenewalReminders: async (req, res) => {
+    try {
+      const stats = await checkAndTriggerPolicyRenewalReminders({ dryRun: false });
+      return res.json({
+        success: true,
+        message: "Automated policy renewal reminder check executed successfully.",
+        stats,
+      });
+    } catch (err) {
+      console.error("triggerRenewalReminders error:", err);
+      return res.status(500).json({ success: false, error: "Failed to trigger policy renewal reminders" });
+    }
+  },
+
+  /**
+   * renewPolicy
+   * Extends policy validity, resets reminder dispatch flags, updates sum insured if specified, and notifies employee
+   */
+  renewPolicy: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { new_end_date, extend_months, sum_insured, notes } = req.body;
+
+      const policy = await MediclaimPolicy.findByPk(id);
+      if (!policy) {
+        return res.status(404).json({ success: false, error: "Policy not found" });
+      }
+
+      let targetEndDate = new_end_date;
+      if (!targetEndDate && extend_months) {
+        const baseDate = policy.policy_end_date ? new Date(policy.policy_end_date) : new Date();
+        baseDate.setMonth(baseDate.getMonth() + parseInt(extend_months, 10));
+        targetEndDate = baseDate.toISOString().split("T")[0];
+      }
+
+      if (!targetEndDate) {
+        // Default: extend 1 full year from current end date
+        const baseDate = policy.policy_end_date ? new Date(policy.policy_end_date) : new Date();
+        baseDate.setFullYear(baseDate.getFullYear() + 1);
+        targetEndDate = baseDate.toISOString().split("T")[0];
+      }
+
+      const prevEndDate = policy.policy_end_date;
+      policy.policy_end_date = targetEndDate;
+      policy.status = "Active";
+      policy.renewal_reminder_30d_sent = false;
+      policy.renewal_reminder_15d_sent = false;
+      policy.renewal_reminder_7d_sent = false;
+
+      if (sum_insured) {
+        policy.sum_insured = parseFloat(sum_insured);
+      }
+
+      const adminName = req.user?.name || req.user?.email || "HR Administration";
+      const timestamp = new Date().toISOString();
+      const renewalEntry = `[${timestamp}] Policy renewed to ${targetEndDate} (prev: ${prevEndDate}) by ${adminName}.${notes ? " " + notes : ""}`;
+      policy.renewal_notes = `${policy.renewal_notes ? policy.renewal_notes + "\n" : ""}${renewalEntry}`;
+
+      await policy.save();
+
+      // Dispatch real-time dashboard notification to employee
+      await sendRealtimeNotification({
+        recipient_id: policy.employee_id,
+        title: "Group Mediclaim Policy Renewed",
+        message: `Your corporate health insurance policy (${policy.policy_number}) has been renewed and is now valid through ${targetEndDate}.`,
+        type: "insurance",
+        category: "Insurance",
+        priority: "normal",
+        link: "/mediclaim",
+        source_module: "policy_renewal",
+        created_by: adminName,
+      });
+
+      return res.json({
+        success: true,
+        message: `Policy #${policy.policy_number} successfully renewed through ${targetEndDate}`,
+        policy,
+      });
+    } catch (err) {
+      console.error("renewPolicy error:", err);
+      return res.status(500).json({ success: false, error: "Failed to renew policy" });
     }
   },
 };

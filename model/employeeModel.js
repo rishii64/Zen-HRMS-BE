@@ -72,6 +72,31 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(100),
         allowNull: true,
       },
+      department_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      designation_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      grade_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      reporting_manager_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      hod_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      hod_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        defaultValue: "N/A",
+      },
 
       group_name: {
         type: DataTypes.STRING(100),
@@ -211,12 +236,12 @@ module.exports = (sequelize) => {
       },
 
       total_experience: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.TEXT,
         allowNull: true,
       },
 
       previous_experience: {
-        type: DataTypes.STRING(100),
+        type: DataTypes.TEXT,
         allowNull: true,
       },
 
@@ -308,6 +333,11 @@ module.exports = (sequelize) => {
 
       esi_threshold: {
         type: DataTypes.NUMERIC,
+        allowNull: true,
+      },
+
+      biometric_device_id: {
+        type: DataTypes.STRING(100),
         allowNull: true,
       },
     },
