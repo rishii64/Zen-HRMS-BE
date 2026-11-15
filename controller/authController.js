@@ -265,12 +265,12 @@ const AuthController = {
         maxAge: 14 * 60 * 60 * 1000 // 14 hours
       });
 
-      // Auto-register attendance check-in on portal login
+      // Auto-register attendance check-in on portal login (skips week offs / holidays unless scheduled)
       let autoAttendance = null;
       try {
         const AttendanceController = require("./attendanceController");
         if (user.employee_id && AttendanceController.performAutoCheckIn) {
-          autoAttendance = await AttendanceController.performAutoCheckIn(user.employee_id);
+          autoAttendance = await AttendanceController.performAutoCheckIn(user.employee_id, false);
         }
       } catch (attErr) {
         console.warn("Auto check-in on login warning:", attErr.message);

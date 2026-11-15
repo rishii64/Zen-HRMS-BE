@@ -6,6 +6,140 @@ const getTodayDateStr = () => {
   return getISTDateStr();
 };
 
+
+/**
+ * Helper to determine if a given date is a Week Off or Company Holiday for an employee,
+ * and whether an explicit working shift is scheduled for that date under Schedule.
+ */
+const checkEmployeeDayStatus = async (employee_id, targetDateStr = null) => {
+  try {
+    const istNow = getISTParts();
+    const dateStr = targetDateStr || istNow.dateStr;
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const targetDate = new Date(y, m - 1, d, 12, 0, 0);
+    const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const dayName = dayNames[targetDate.getDay()];
+    const dayAbbr = dayName.slice(0, 3);
+
+    // 1. Fetch employee and user profiles to inspect configured weekly off, dept & branch
+    const cleanEmpId = (employee_id || "").toLowerCase().trim();
+    const [emp, user] = await Promise.all([
+      Employee.findOne({
+        where: sequelize.where(
+          sequelize.fn("LOWER", sequelize.col("employee_id")),
+          cleanEmpId
+        ),
+        attributes: ["employee_id", "weekly_off", "dept", "work_location"],
+      }),
+      User.findOne({
+        where: sequelize.where(
+          sequelize.fn("LOWER", sequelize.col("employee_id")),
+          cleanEmpId
+        ),
+        attributes: ["employee_id", "weekly_off", "dept"],
+      }),
+    ]);
+
+    const empDept = emp?.dept || user?.dept || "General";
+    const empLocation = emp?.work_location || "All";
+
+    // 2. Check weekly off configuration
+    const rawWeeklyOff = (emp?.weekly_off || user?.weekly_off || "Sunday").toLowerCase().trim();
+    const offList = rawWeeklyOff.split(/[,\s/]+/).map((s) => s.trim()).filter(Boolean);
+    const isWeeklyOff = offList.length > 0
+      ? offList.some((off) => off === dayName || off === dayAbbr || dayName.includes(off) || off.includes(dayName))
+      : dayName === "sunday";
+
+    // 3. Check public/company holidays for this date
+    const holidays = await Holiday.findAll({
+      where: {
+        date: dateStr,
+        is_working_day: false,
+      },
+      raw: true,
+    });
+
+    const matchingHoliday = holidays.find((h) => {
+      const hDept = (h.dept || "All").toLowerCase().trim();
+      const hLoc = (h.branch_location || "All").toLowerCase().trim();
+      const deptMatch = hDept === "all" || hDept === empDept.toLowerCase().trim() || empDept.toLowerCase().trim() === "all";
+      const locMatch = hLoc === "all" || hLoc === empLocation.toLowerCase().trim() || empLocation.toLowerCase().trim() === "all";
+      return deptMatch && locMatch;
+    });
+
+    const isHoliday = Boolean(matchingHoliday);
+
+    // 4. Check for an active working schedule assigned for today
+    const schedule = await Schedule.findOne({
+      where: {
+        [Op.and]: [
+          sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("employee_id")),
+            cleanEmpId
+          ),
+          { date: dateStr }
+        ]
+      },
+      order: [["id", "DESC"]]
+    });
+
+    let hasDedicatedWorkday = false;
+    if (schedule) {
+      const sName = (schedule.shift_name || "").toLowerCase().trim();
+      const sStatus = (schedule.status || "").toLowerCase().trim();
+      const isOffShift =
+        schedule.is_rotational_off ||
+        sName === "off" ||
+        sName.includes("week off") ||
+        sName.includes("weekly off") ||
+        sName.includes("holiday") ||
+        sName.includes("leave") ||
+        sStatus === "cancelled" ||
+        sStatus === "inactive";
+
+      if (!isOffShift) {
+        hasDedicatedWorkday = true;
+      }
+    }
+
+    const isOffDay = (isWeeklyOff || isHoliday) && !hasDedicatedWorkday;
+    let offDayType = null;
+    let offDayName = null;
+    if (isOffDay) {
+      if (isHoliday) {
+        offDayType = "Holiday";
+        offDayName = matchingHoliday.name || "Company Holiday";
+      } else if (isWeeklyOff) {
+        offDayType = "Week Off";
+        offDayName = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+      }
+    }
+
+    return {
+      isWeeklyOff,
+      isHoliday,
+      holiday: matchingHoliday || null,
+      hasDedicatedWorkday,
+      isOffDay,
+      offDayType,
+      offDayName,
+      schedule: schedule || null,
+    };
+  } catch (err) {
+    console.error("Error checking employee day status:", err.message);
+    return {
+      isWeeklyOff: false,
+      isHoliday: false,
+      holiday: null,
+      hasDedicatedWorkday: false,
+      isOffDay: false,
+      offDayType: null,
+      offDayName: null,
+      schedule: null,
+    };
+  }
+};
+
 // Helper to resolve an employee's assigned schedule and determine check-in status
 const resolveShiftAndStatus = async (employee_id, today, utcToday, now, checkInTimeStr = null) => {
   try {
@@ -595,12 +729,24 @@ const AttendanceController = {
         plainRecord.shift_end = isValidTime(schedule?.end_time) ? schedule.end_time : "19:00";
       }
 
+      const dayStatus = await checkEmployeeDayStatus(employee_id, today);
+      if (!schedule && dayStatus.schedule) {
+        schedule = dayStatus.schedule;
+      }
+
       return res.json({
         success: true,
         checkedIn: !!(record?.check_in && record.check_in !== "—"),
         checkedOut: !!(record?.check_out && record.check_out !== "—"),
         record: plainRecord,
         schedule: schedule || null,
+        isOffDay: dayStatus.isOffDay,
+        offDayType: dayStatus.offDayType,
+        offDayName: dayStatus.offDayName,
+        hasDedicatedWorkday: dayStatus.hasDedicatedWorkday,
+        isWeeklyOff: dayStatus.isWeeklyOff,
+        isHoliday: dayStatus.isHoliday,
+        holidayName: dayStatus.holiday?.name || null,
       });
     } catch (err) {
       console.error("Get today status error:", err.message);
@@ -609,7 +755,7 @@ const AttendanceController = {
   },
 
   // Programmatic / automated check-in logic
-  async performAutoCheckIn(employee_id) {
+  async performAutoCheckIn(employee_id, isManual = false) {
     if (!employee_id) return null;
     const istNow = getISTParts();
     const today = istNow.dateStr;
@@ -634,6 +780,29 @@ const AttendanceController = {
     if (record && record.check_in && record.check_in !== "—") {
       const responseRecord = record.toJSON ? record.toJSON() : { ...record };
       return { success: true, message: "Already checked in today", record: responseRecord, alreadyCheckedIn: true };
+    }
+
+    // Check if today is a week off or holiday without an explicitly assigned working schedule
+    const dayStatus = await checkEmployeeDayStatus(user.employee_id, today);
+    if (dayStatus.isOffDay && !dayStatus.hasDedicatedWorkday) {
+      if (!isManual) {
+        // Portal login or automatic background trigger: DO NOT register a check-in for an off day
+        return {
+          success: false,
+          isOffDay: true,
+          skipped: true,
+          offDayType: dayStatus.offDayType,
+          offDayName: dayStatus.offDayName,
+          message: `Auto check-in skipped: Today is your ${dayStatus.offDayType} (${dayStatus.offDayName}) and no dedicated workday is assigned under Schedule.`,
+        };
+      } else {
+        // Manual check-in button click attempt
+        return {
+          success: false,
+          isOffDay: true,
+          error: `Today is your scheduled ${dayStatus.offDayType} (${dayStatus.offDayName}). Check-in is not permitted unless a dedicated workday shift is assigned under Schedule.`,
+        };
+      }
     }
 
     // Check shift timing and determine if on-time (Present) or late (Late Present) in IST
@@ -740,9 +909,17 @@ const AttendanceController = {
       if (!employee_id) {
         return res.status(400).json({ error: "Employee identifier missing from session" });
       }
-      const result = await AttendanceController.performAutoCheckIn(employee_id);
+      const result = await AttendanceController.performAutoCheckIn(employee_id, true);
       if (!result) {
         return res.status(404).json({ error: "User profile not found" });
+      }
+      if (!result.success) {
+        return res.status(400).json({
+          error: result.error || result.message || "Check-in not permitted for this date",
+          isOffDay: result.isOffDay,
+          offDayType: result.offDayType,
+          offDayName: result.offDayName,
+        });
       }
       return res.json(result);
     } catch (err) {
