@@ -66,7 +66,18 @@ CREATE TABLE IF NOT EXISTS users (
   uploaded_documents TEXT,
   last_company_details TEXT,
   weekly_off VARCHAR(20) DEFAULT 'Sunday',
-  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL
+  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL,
+  group_name VARCHAR(100) DEFAULT 'TATA Company',
+  company_name VARCHAR(100) DEFAULT 'TATA Steel',
+  work_location VARCHAR(100) DEFAULT 'Kolkata',
+  department_id INTEGER,
+  designation_id INTEGER,
+  grade_id INTEGER,
+  reporting_manager_id VARCHAR(50),
+  hod_id VARCHAR(50),
+  hod_name VARCHAR(150),
+  facilities TEXT,
+  esi_threshold NUMERIC
 );
 
 -- Migration: Ensure every column exists if table already existed
@@ -129,6 +140,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS uploaded_documents TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_company_details TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_off VARCHAR(20) DEFAULT 'Sunday';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50) DEFAULT 'Permanent';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS designation_id INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS grade_id INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS facilities TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
 
 -- ==========================================================================
 -- TABLE: employees (53 columns)
@@ -187,7 +206,18 @@ CREATE TABLE IF NOT EXISTS employees (
   uploaded_documents TEXT,
   last_company_details TEXT,
   weekly_off VARCHAR(20) DEFAULT 'Sunday',
-  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL
+  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL,
+  group_name VARCHAR(100) DEFAULT 'TATA Company',
+  company_name VARCHAR(100) DEFAULT 'TATA Steel',
+  work_location VARCHAR(100) DEFAULT 'Kolkata',
+  department_id INTEGER,
+  designation_id INTEGER,
+  grade_id INTEGER,
+  reporting_manager_id VARCHAR(50),
+  hod_id VARCHAR(50),
+  hod_name VARCHAR(150),
+  facilities TEXT,
+  esi_threshold NUMERIC
 );
 
 -- Migration: Ensure every column exists if table already existed
@@ -246,6 +276,15 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS uploaded_documents TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_company_details TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS weekly_off VARCHAR(20) DEFAULT 'Sunday';
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50) DEFAULT 'Permanent';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id INTEGER;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS designation_id INTEGER;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS grade_id INTEGER;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS facilities TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS biometric_device_id VARCHAR(50);
 
 -- ==========================================================================
 -- TABLE: password_resets (5 columns)

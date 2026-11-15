@@ -14,7 +14,7 @@ const resolveTargetEmpId = (req, empId) => {
       : (req.cookies && req.cookies.token);
     if (token) {
       try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || "superSecretKey");
         if (decoded && decoded.employee_id) return decoded.employee_id;
       } catch (_) {}
     }

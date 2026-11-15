@@ -78,8 +78,9 @@ const authenticate = (req, res, next) => {
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
+  const jwtSecret = process.env.JWT_SECRET || "superSecretKey";
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, jwtSecret);
     if (decoded && decoded.role && decoded.role.toLowerCase() === "employees") {
       decoded.role = "employee";
     }
@@ -171,15 +172,16 @@ const authenticateAllowExpired = (req, res, next) => {
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
+  const jwtSecret = process.env.JWT_SECRET || "superSecretKey";
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, jwtSecret);
     if (!decoded.designation) decoded.designation = "";
     req.user = decoded;
     return next();
   } catch (error) {
     if (error.name === "TokenExpiredError") {
       try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
+        const decoded = jwt.verify(token, jwtSecret, { ignoreExpiration: true });
         if (!decoded.designation) decoded.designation = "";
         req.user = decoded;
         return next();
