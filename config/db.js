@@ -712,6 +712,21 @@ User.belongsTo(JobGrade, {
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
+
+    // Ensure critical hierarchy & role columns exist on users and employees immediately
+    try {
+      await sequelize.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
+      `);
+    } catch (coreColErr) {
+      console.warn("Core hierarchy columns check note:", coreColErr.message);
+    }
+
     try {
       await sequelize.query(`
         ALTER TABLE users ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
@@ -721,6 +736,9 @@ const connectDB = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS designation_id INTEGER;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS grade_id INTEGER;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS dob DATE;
@@ -766,6 +784,9 @@ const connectDB = async () => {
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS designation_id INTEGER;
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS grade_id INTEGER;
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS dob DATE;
