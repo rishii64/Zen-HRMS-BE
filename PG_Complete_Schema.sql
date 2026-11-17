@@ -74,8 +74,11 @@ CREATE TABLE IF NOT EXISTS users (
   designation_id INTEGER,
   grade_id INTEGER,
   reporting_manager_id VARCHAR(50),
+  team_lead_id VARCHAR(50),
+  team_lead_name VARCHAR(100) DEFAULT 'N/A',
   hod_id VARCHAR(50),
   hod_name VARCHAR(150),
+  role_updated_at TIMESTAMPTZ,
   facilities TEXT,
   esi_threshold NUMERIC
 );
@@ -144,8 +147,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS designation_id INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS grade_id INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS facilities TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
 
@@ -214,8 +220,11 @@ CREATE TABLE IF NOT EXISTS employees (
   designation_id INTEGER,
   grade_id INTEGER,
   reporting_manager_id VARCHAR(50),
+  team_lead_id VARCHAR(50),
+  team_lead_name VARCHAR(100) DEFAULT 'N/A',
   hod_id VARCHAR(50),
   hod_name VARCHAR(150),
+  role_updated_at TIMESTAMPTZ,
   facilities TEXT,
   esi_threshold NUMERIC
 );
@@ -280,8 +289,11 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id INTEGER;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS designation_id INTEGER;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS grade_id INTEGER;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS facilities TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS biometric_device_id VARCHAR(50);
