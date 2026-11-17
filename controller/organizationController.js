@@ -349,7 +349,7 @@ const OrganizationController = {
   // POST /api/auth/designations
   async createDesignation(req, res) {
     try {
-      const { title, code, department_id, grade_id, job_family, is_hod_role, description } = req.body;
+      const { title, code, department_id, grade_id, job_family, is_hod_role, is_tl_role, description } = req.body;
 
       if (!title || !grade_id) {
         return res.status(400).json({ error: "Title and Job Grade (Grade ID) are required." });
@@ -375,6 +375,7 @@ const OrganizationController = {
         grade_id: parseInt(grade_id, 10),
         job_family: job_family ? job_family.trim() : "General",
         is_hod_role: !!is_hod_role,
+        is_tl_role: !is_hod_role && !!is_tl_role,
         description: description || null,
         is_active: true,
       });
@@ -402,7 +403,7 @@ const OrganizationController = {
   async updateDesignation(req, res) {
     try {
       const { id } = req.params;
-      const { title, code, department_id, grade_id, job_family, is_hod_role, description, is_active } = req.body;
+      const { title, code, department_id, grade_id, job_family, is_hod_role, is_tl_role, description, is_active } = req.body;
 
       const desig = await Designation.findByPk(id);
       if (!desig) {
@@ -415,7 +416,8 @@ const OrganizationController = {
         ...(department_id !== undefined ? { department_id: department_id ? parseInt(department_id, 10) : null } : {}),
         ...(grade_id !== undefined ? { grade_id: parseInt(grade_id, 10) } : {}),
         ...(job_family !== undefined ? { job_family: job_family.trim() } : {}),
-        ...(is_hod_role !== undefined ? { is_hod_role: !!is_hod_role } : {}),
+        ...(is_hod_role !== undefined ? { is_hod_role: !!is_hod_role, ...(is_hod_role ? { is_tl_role: false } : {}) } : {}),
+        ...(is_tl_role !== undefined ? { is_tl_role: !!is_tl_role, ...(is_tl_role ? { is_hod_role: false } : {}) } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(is_active !== undefined ? { is_active: !!is_active } : {}),
       });
@@ -469,13 +471,13 @@ const OrganizationController = {
         Employee.findAll({
           include: [
             { model: Department, as: "departmentProfile", attributes: ["id", "dept_code", "dept_name", "hod_employee_id", "hod_name"] },
-            { model: Designation, as: "designationProfile", attributes: ["id", "title", "code", "job_family", "is_hod_role"] },
+            { model: Designation, as: "designationProfile", attributes: ["id", "title", "code", "job_family", "is_hod_role", "is_tl_role"] },
             { model: JobGrade, as: "gradeProfile", attributes: ["id", "grade_code", "grade_name", "rank_level", "min_salary", "max_salary"] }
           ],
           order: [["id", "ASC"]]
         }),
         User.findAll({
-          attributes: ["employee_id", "name", "email", "profile_photo", "role", "designation", "dept", "reporting_manager_id", "hod_id", "hod_name"]
+          attributes: ["employee_id", "name", "email", "profile_photo", "role", "designation", "dept", "reporting_manager_id", "hod_id", "hod_name", "team_lead_id", "team_lead_name"]
         }),
         Department.findAll({
           order: [["dept_name", "ASC"]]
@@ -503,8 +505,25 @@ const OrganizationController = {
           user.hod_id === emp.employee_id ||
           emp.departmentProfile?.hod_employee_id === emp.employee_id ||
           emp.designationProfile?.is_hod_role ||
-          /hod|head|general manager|chro|ceo|coo|cto|cfo|vp/i.test(desigTitle)
+          /hod|head of|department head|chro|ceo|coo|cto|cfo|vp/i.test(desigTitle)
         );
+
+        const isTeamLead = !isHod && !!(
+          emp.designationProfile?.is_tl_role ||
+          rankLevel === 4 ||
+          /team lead|tech lead|team leader|lead developer|lead engineer|tl/i.test(desigTitle)
+        );
+
+        let hierarchyTier = "STAFF";
+        if (rankLevel >= 11) {
+          hierarchyTier = "EXECUTIVE";
+        } else if (isHod || rankLevel >= 8) {
+          hierarchyTier = "HOD";
+        } else if (rankLevel >= 5 && rankLevel <= 7) {
+          hierarchyTier = "MANAGER";
+        } else if (isTeamLead || rankLevel === 4) {
+          hierarchyTier = "TEAM_LEAD";
+        }
 
         nodeMap[emp.employee_id] = {
           id: emp.id,
@@ -523,6 +542,8 @@ const OrganizationController = {
           grade_name: emp.gradeProfile?.grade_name || `Level ${rankLevel}`,
           reporting_manager_id: emp.reporting_manager_id || user.reporting_manager_id || null,
           reporting_manager_name: null,
+          team_lead_id: emp.team_lead_id || user.team_lead_id || null,
+          team_lead_name: emp.team_lead_name || user.team_lead_name || null,
           hod_id: emp.hod_id || user.hod_id || emp.departmentProfile?.hod_employee_id || null,
           hod_name: emp.hod_name || user.hod_name || emp.departmentProfile?.hod_name || null,
           work_location: emp.work_location || "Kolkata",
@@ -530,6 +551,8 @@ const OrganizationController = {
           status: emp.status || "Active",
           current_salary: emp.current_salary ? parseFloat(emp.current_salary) : 0,
           is_hod: isHod,
+          is_team_lead: isTeamLead,
+          hierarchy_tier: hierarchyTier,
           direct_reports_count: 0,
           total_reports_count: 0,
           children: []
@@ -561,6 +584,10 @@ const OrganizationController = {
         }
         if (mgrId && nodeMap[mgrId]) {
           n.reporting_manager_name = nodeMap[mgrId].name;
+        }
+        const tlId = n.team_lead_id;
+        if (tlId && nodeMap[tlId]) {
+          n.team_lead_name = nodeMap[tlId].name;
         }
       });
 
@@ -659,11 +686,11 @@ const OrganizationController = {
         Department.findAll({ order: [["dept_name", "ASC"]] }),
         Employee.findAll({
           include: [
-            { model: Designation, as: "designationProfile", attributes: ["id", "title", "code", "job_family", "is_hod_role"] },
+            { model: Designation, as: "designationProfile", attributes: ["id", "title", "code", "job_family", "is_hod_role", "is_tl_role"] },
             { model: JobGrade, as: "gradeProfile", attributes: ["id", "grade_code", "grade_name", "rank_level", "min_salary", "max_salary"] }
           ]
         }),
-        User.findAll({ attributes: ["employee_id", "name", "email", "profile_photo", "role"] }),
+        User.findAll({ attributes: ["employee_id", "name", "email", "profile_photo", "role", "team_lead_id", "team_lead_name"] }),
         JobGrade.findAll({ order: [["rank_level", "ASC"]] })
       ]);
 
@@ -688,6 +715,9 @@ const OrganizationController = {
           rank_level: emp.gradeProfile?.rank_level || 1,
           grade_code: emp.gradeProfile?.grade_code || "L1",
           reporting_manager_id: emp.reporting_manager_id,
+          team_lead_id: emp.team_lead_id || user.team_lead_id || null,
+          team_lead_name: emp.team_lead_name || user.team_lead_name || null,
+          is_team_lead: !!(emp.designationProfile?.is_tl_role || emp.gradeProfile?.rank_level === 4 || /team lead|tech lead|\btl\b/i.test(emp.designationProfile?.title || emp.designation || "")),
           employment_type: emp.employment_type || "Permanent",
           work_location: emp.work_location || "Kolkata",
           current_salary: emp.current_salary ? parseFloat(emp.current_salary) : 0,
@@ -707,9 +737,13 @@ const OrganizationController = {
         const rankCounts = {
           executive: uniqueEmps.filter((e) => e.rank_level >= 11).length,
           senior_leadership: uniqueEmps.filter((e) => e.rank_level >= 8 && e.rank_level <= 10).length,
-          management: uniqueEmps.filter((e) => e.rank_level >= 4 && e.rank_level <= 7).length,
-          staff: uniqueEmps.filter((e) => e.rank_level <= 3).length
+          management: uniqueEmps.filter((e) => e.rank_level >= 5 && e.rank_level <= 7).length,
+          team_leads: uniqueEmps.filter((e) => e.is_team_lead || e.rank_level === 4).length,
+          staff: uniqueEmps.filter((e) => e.rank_level <= 3 && !e.is_team_lead).length
         };
+
+        const deptTeamLeads = uniqueEmps.filter((e) => e.is_team_lead || e.rank_level === 4);
+        const deptManagers = uniqueEmps.filter((e) => (e.rank_level >= 5 && e.rank_level <= 7) && !e.is_team_lead);
 
         const totalSalary = uniqueEmps.reduce((acc, curr) => acc + (curr.current_salary || 0), 0);
 
@@ -744,6 +778,8 @@ const OrganizationController = {
           total_payroll: totalSalary,
           avg_salary: uniqueEmps.length ? Math.round(totalSalary / uniqueEmps.length) : 0,
           hod: hodInfo,
+          team_leads: deptTeamLeads,
+          managers: deptManagers,
           rank_breakdown: rankCounts,
           employees: uniqueEmps
         };
@@ -869,6 +905,56 @@ const OrganizationController = {
     } catch (err) {
       console.error("Reassign HOD error:", err);
       return res.status(500).json({ error: "Failed to update HOD: " + err.message });
+    }
+  },
+
+  // PUT /api/auth/organization/team-lead
+  // Reassign an employee's Team Lead (TL)
+  async reassignTeamLead(req, res) {
+    try {
+      const { employee_id, new_team_lead_id } = req.body;
+      if (!employee_id) {
+        return res.status(400).json({ error: "employee_id is required" });
+      }
+
+      if (employee_id === new_team_lead_id) {
+        return res.status(400).json({ error: "An employee cannot be their own Team Lead." });
+      }
+
+      const emp = await Employee.findOne({ where: { employee_id } });
+      if (!emp) {
+        return res.status(404).json({ error: `Employee ${employee_id} not found.` });
+      }
+
+      let tlName = null;
+      if (new_team_lead_id) {
+        const tlEmp = await Employee.findOne({ where: { employee_id: new_team_lead_id } });
+        const tlUser = !tlEmp ? await User.findOne({ where: { employee_id: new_team_lead_id } }) : null;
+        if (!tlEmp && !tlUser) {
+          return res.status(404).json({ error: `Target Team Lead ${new_team_lead_id} not found.` });
+        }
+        tlName = tlEmp ? `${tlEmp.first_name || ""} ${tlEmp.last_name || ""}`.trim() || tlEmp.name : tlUser.name;
+      }
+
+      await Employee.update(
+        { team_lead_id: new_team_lead_id || null, team_lead_name: tlName || "N/A" },
+        { where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()) }
+      );
+      await User.update(
+        { team_lead_id: new_team_lead_id || null, team_lead_name: tlName || "N/A" },
+        { where: sequelize.where(sequelize.fn("LOWER", sequelize.col("employee_id")), employee_id.toLowerCase().trim()) }
+      );
+
+      return res.json({
+        success: true,
+        message: `Team Lead for ${employee_id} updated to ${tlName || "None"}.`,
+        employee_id,
+        new_team_lead_id: new_team_lead_id || null,
+        new_team_lead_name: tlName || "None"
+      });
+    } catch (err) {
+      console.error("Reassign Team Lead error:", err);
+      return res.status(500).json({ error: "Failed to update Team Lead: " + err.message });
     }
   },
 

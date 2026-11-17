@@ -66,7 +66,18 @@ CREATE TABLE IF NOT EXISTS users (
   uploaded_documents TEXT,
   last_company_details TEXT,
   weekly_off VARCHAR(20) DEFAULT 'Sunday',
-  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL
+  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL,
+  group_name VARCHAR(100) DEFAULT 'TATA Company',
+  company_name VARCHAR(100) DEFAULT 'TATA Steel',
+  work_location VARCHAR(100) DEFAULT 'Kolkata',
+  department_id INTEGER,
+  designation_id INTEGER,
+  grade_id INTEGER,
+  reporting_manager_id VARCHAR(50),
+  hod_id VARCHAR(50),
+  hod_name VARCHAR(150),
+  facilities TEXT,
+  esi_threshold NUMERIC
 );
 
 -- Migration: Ensure every column exists if table already existed
@@ -129,6 +140,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS uploaded_documents TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_company_details TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_off VARCHAR(20) DEFAULT 'Sunday';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50) DEFAULT 'Permanent';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS designation_id INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS grade_id INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS facilities TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
 
 -- ==========================================================================
 -- TABLE: employees (53 columns)
@@ -187,7 +206,18 @@ CREATE TABLE IF NOT EXISTS employees (
   uploaded_documents TEXT,
   last_company_details TEXT,
   weekly_off VARCHAR(20) DEFAULT 'Sunday',
-  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL
+  employment_type VARCHAR(50) DEFAULT 'Permanent' NOT NULL,
+  group_name VARCHAR(100) DEFAULT 'TATA Company',
+  company_name VARCHAR(100) DEFAULT 'TATA Steel',
+  work_location VARCHAR(100) DEFAULT 'Kolkata',
+  department_id INTEGER,
+  designation_id INTEGER,
+  grade_id INTEGER,
+  reporting_manager_id VARCHAR(50),
+  hod_id VARCHAR(50),
+  hod_name VARCHAR(150),
+  facilities TEXT,
+  esi_threshold NUMERIC
 );
 
 -- Migration: Ensure every column exists if table already existed
@@ -246,6 +276,15 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS uploaded_documents TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_company_details TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS weekly_off VARCHAR(20) DEFAULT 'Sunday';
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50) DEFAULT 'Permanent';
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS department_id INTEGER;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS designation_id INTEGER;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS grade_id INTEGER;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS reporting_manager_id VARCHAR(50);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_id VARCHAR(50);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS hod_name VARCHAR(150);
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS facilities TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS esi_threshold NUMERIC;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS biometric_device_id VARCHAR(50);
 
 -- ==========================================================================
 -- TABLE: password_resets (5 columns)
@@ -1520,5 +1559,34 @@ CREATE INDEX IF NOT EXISTS idx_loan_status ON loans_advances (status);
 CREATE INDEX IF NOT EXISTS idx_loan_type ON loans_advances (type);
 CREATE INDEX IF NOT EXISTS idx_repayment_loan_id ON loan_repayment_logs (loan_id);
 CREATE INDEX IF NOT EXISTS idx_repayment_emp ON loan_repayment_logs (employee_id);
+
+-- Work From Home (WFH) Requests Table
+CREATE TABLE IF NOT EXISTS work_from_homes (
+  id SERIAL PRIMARY KEY,
+  request_no VARCHAR(50) NOT NULL UNIQUE,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(100) NOT NULL,
+  department VARCHAR(100) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  day_type VARCHAR(50) NOT NULL DEFAULT 'Full Day',
+  total_days NUMERIC(4, 1) NOT NULL DEFAULT 1.0,
+  reason TEXT NOT NULL,
+  work_plan TEXT,
+  emergency_contact VARCHAR(50),
+  status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+  current_level INTEGER DEFAULT 1,
+  approver_id VARCHAR(50),
+  approver_name VARCHAR(100),
+  approval_remarks TEXT,
+  approved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wfh_emp_id ON work_from_homes (employee_id);
+CREATE INDEX IF NOT EXISTS idx_wfh_dates ON work_from_homes (start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_wfh_status ON work_from_homes (status);
+
 
 

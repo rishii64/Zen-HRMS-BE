@@ -251,7 +251,7 @@ const AuthController = {
           grade_code: gradeCode,
           is_hod: isHod,
         },
-        process.env.JWT_SECRET,
+        process.env.JWT_SECRET || "superSecretKey",
         { expiresIn: "14h" }
       );
 
@@ -304,8 +304,11 @@ const AuthController = {
         }
       });
     } catch (err) {
-      console.error("Login error:", err.message);
-      return res.status(500).json({ error: "Login failed. Please try again." });
+      console.error("Login error:", err);
+      return res.status(500).json({ 
+        error: "Login failed. Please try again.",
+        details: err.message
+      });
     }
   },
 

@@ -35,7 +35,7 @@ const HODController = {
           userDept = emp.dept;
         }
       }
-      if (!userDept) userDept = "Engineering / Tech";
+      if (!userDept) userDept = "IT Department";
 
       const todayStr = getISTDateStr();
 

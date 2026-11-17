@@ -595,7 +595,7 @@ function isUserAuthorizedForDeptStep(step, resignation, user) {
     return d1 === d2 || d1.includes(d2) || d2.includes(d1);
   };
 
-  // Home Department Step (e.g. "Engineering / Tech Clearance" or step.id === "dept")
+  // Home Department Step (e.g. "IT Department Clearance" or step.id === "dept")
   const isHomeDeptStep = stepId === "dept" ||
                          (resDept && (matchDept(stepDeptKey, resDept) || matchDept(stepName, resDept)));
   if (isHomeDeptStep) {

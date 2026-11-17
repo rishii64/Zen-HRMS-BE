@@ -11,6 +11,8 @@ const {
   ExpenseClaim,
   OvertimeTicket,
   LoanAdvance,
+  Attendance,
+  WorkFromHome,
   sequelize,
 } = require("../config/db");
 const { sendRealtimeNotification } = require("../socket");
@@ -57,6 +59,29 @@ const resolveApproverDetails = async (emp, approverType, approverRole, specificE
         }
       } catch (_) {}
     }
+  } else if (approverType === "TEAM_LEAD") {
+    assignedToId = emp?.team_lead_id || null;
+    assignedToName = emp?.team_lead_name || "Team Lead";
+
+    if (!assignedToId && (emp?.dept || emp?.department_id)) {
+      try {
+        const tlEmp = await Employee.findOne({
+          where: {
+            ...(emp.department_id ? { department_id: emp.department_id } : {}),
+            ...(emp.dept ? { dept: emp.dept } : {}),
+            [Op.or]: [
+              { is_tl_role: true },
+              sequelize.where(sequelize.fn("LOWER", sequelize.col("designation")), { [Op.like]: "%team lead%" }),
+              sequelize.where(sequelize.fn("LOWER", sequelize.col("designation")), { [Op.like]: "%tech lead%" }),
+            ],
+          },
+        });
+        if (tlEmp) {
+          assignedToId = tlEmp.employee_id;
+          assignedToName = `${tlEmp.first_name || ""} ${tlEmp.last_name || ""}`.trim() || tlEmp.name;
+        }
+      } catch (_) {}
+    }
   } else if (approverType === "HOD") {
     assignedToId = emp?.hod_id || null;
     assignedToName = emp?.hod_name || "Department Head";
@@ -88,6 +113,9 @@ const resolveApproverDetails = async (emp, approverType, approverRole, specificE
   } else if (approverType === "ROLE") {
     assignedToId = null;
     const roleTitles = {
+      teamlead: "Team Lead",
+      tl: "Team Lead",
+      lead: "Team Lead",
       hr: "HR Department",
       finance: "Finance & Accounts",
       accounts: "Accounts Department",
@@ -165,6 +193,12 @@ const initiateApprovalRequest = async ({
           { level_order: 1, level_name: "Line Manager Verification", approver_type: "REPORTING_MANAGER", approver_role: "manager", condition_type: "ALWAYS", is_mandatory: true, can_auto_skip: true },
           { level_order: 2, level_name: "Department Head (HOD) Clearance", approver_type: "HOD", approver_role: "hod", condition_type: "ALWAYS", is_mandatory: true, can_auto_skip: true },
           { level_order: 3, level_name: "Finance & Accounts Audit", approver_type: "ROLE", approver_role: "finance", condition_type: "ALWAYS", is_mandatory: true, can_auto_skip: false },
+        ];
+      } else if (module === "WORK_FROM_HOME" || module === "WFH") {
+        stepDefs = [
+          { level_order: 1, level_name: "Reporting Manager Endorsement", approver_type: "REPORTING_MANAGER", approver_role: "manager", condition_type: "ALWAYS", is_mandatory: true, can_auto_skip: true },
+          { level_order: 2, level_name: "Department Head (HOD) Approval", approver_type: "HOD", approver_role: "hod", condition_type: "ALWAYS", is_mandatory: true, can_auto_skip: true },
+          { level_order: 3, level_name: "HR Operations Verification", approver_type: "ROLE", approver_role: "hr", condition_type: "ALWAYS", is_mandatory: true, can_auto_skip: false },
         ];
       } else {
         stepDefs = [
@@ -361,6 +395,8 @@ const processApprovalAction = async ({
         isAuthorized = true;
       } else if (currentStep.approver_type === "ROLE" && currentStep.approver_role) {
         isAuthorized = approverRole === currentStep.approver_role.toLowerCase() || (currentStep.approver_role === "finance" && ["finance", "accounts"].includes(approverRole));
+      } else if (currentStep.approver_type === "TEAM_LEAD" && ["teamlead", "tl", "manager", "hod"].includes(approverRole)) {
+        isAuthorized = true;
       } else if (currentStep.approver_type === "HOD" && ["hod", "manager"].includes(approverRole)) {
         isAuthorized = true;
       } else if (currentStep.approver_type === "REPORTING_MANAGER" && ["manager", "teamlead", "hod"].includes(approverRole)) {
@@ -659,6 +695,74 @@ const syncUnderlyingEntityStatus = async (module, entityId, decision, approverNa
             finance_decision: "REJECTED",
             finance_comments: comments || "Rejected via multi-level approval chain",
             finance_action_date: new Date(),
+          });
+        }
+      }
+    } else if (module === "WORK_FROM_HOME" || module === "WFH") {
+      const wfh = await WorkFromHome.findByPk(entityId);
+      if (wfh) {
+        if (decision === "APPROVED") {
+          await wfh.update({
+            status: "Approved",
+            approver_name: approverName,
+            approval_remarks: comments || "Approved via multi-level sequential chain",
+            approved_at: new Date(),
+          });
+
+          // Sync with Attendance table for each date in WFH range
+          try {
+            const startD = new Date(wfh.start_date + "T12:00:00+05:30");
+            const endD = new Date(wfh.end_date + "T12:00:00+05:30");
+            const cur = new Date(startD);
+
+            const isHalfDay = wfh.day_type === "First Half" || wfh.day_type === "Second Half";
+            const workHours = isHalfDay ? 4.00 : 8.00;
+            const checkOutTime = isHalfDay ? "14:00" : "19:00";
+
+            while (cur <= endD) {
+              const y = cur.getFullYear();
+              const m = String(cur.getMonth() + 1).padStart(2, "0");
+              const d = String(cur.getDate()).padStart(2, "0");
+              const dateStr = `${y}-${m}-${d}`;
+
+              const existingAtt = await Attendance.findOne({
+                where: {
+                  employee_id: wfh.employee_id,
+                  date: dateStr,
+                },
+              });
+
+              if (existingAtt) {
+                await existingAtt.update({
+                  status: "WFH",
+                  work_hours: existingAtt.work_hours || workHours,
+                  notes: `Approved Work From Home (${wfh.request_no}) - ${wfh.reason || 'Remote Work'}${existingAtt.notes ? ` | ${existingAtt.notes}` : ''}`,
+                });
+              } else {
+                await Attendance.create({
+                  employee_id: wfh.employee_id,
+                  name: wfh.employee_name,
+                  dept: wfh.department,
+                  date: dateStr,
+                  check_in: "10:00",
+                  check_out: checkOutTime,
+                  work_hours: workHours,
+                  status: "WFH",
+                  late_count: 0,
+                  notes: `Approved Work From Home (${wfh.request_no}) - ${wfh.reason || 'Remote Work'}`,
+                });
+              }
+
+              cur.setDate(cur.getDate() + 1);
+            }
+          } catch (attSyncErr) {
+            console.warn("Failed to sync WFH with Attendance table:", attSyncErr.message);
+          }
+        } else {
+          await wfh.update({
+            status: "Rejected",
+            approver_name: approverName,
+            approval_remarks: comments || "Rejected",
           });
         }
       }

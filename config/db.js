@@ -75,6 +75,7 @@ const { InfoSecCampaign, InfoSecAcknowledgment } = require("../model/infoSecMode
 const { FeedbackCycle360, FeedbackAssignment360, FeedbackSummary360 } = require("../model/feedback360Model")(sequelize);
 const CandidatePreJoining = require("../model/candidatePreJoiningModel")(sequelize);
 const AttendanceRegularization = require("../model/attendanceRegularizationModel")(sequelize);
+const WorkFromHome = require("../model/workFromHomeModel")(sequelize);
 
 // Model Associations
 
@@ -730,6 +731,7 @@ const connectDB = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact_name VARCHAR(100);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact_phone VARCHAR(20);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS education TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS highest_qualification VARCHAR(150);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS family_details TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_resume VARCHAR(255);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_id VARCHAR(255);
@@ -774,6 +776,7 @@ const connectDB = async () => {
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact_name VARCHAR(100);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact_phone VARCHAR(20);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS education TEXT;
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS highest_qualification VARCHAR(150);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS family_details TEXT;
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_resume VARCHAR(255);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS doc_id VARCHAR(255);
@@ -839,23 +842,41 @@ const connectDB = async () => {
           grade_id INTEGER NOT NULL REFERENCES job_grades(id) ON DELETE RESTRICT,
           job_family VARCHAR(100) NOT NULL DEFAULT 'General',
           is_hod_role BOOLEAN NOT NULL DEFAULT false,
+          is_tl_role BOOLEAN NOT NULL DEFAULT false,
           description TEXT,
           is_active BOOLEAN NOT NULL DEFAULT true,
           created_at TIMESTAMPTZ DEFAULT NOW(),
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
 
+        ALTER TABLE designations ADD COLUMN IF NOT EXISTS is_tl_role BOOLEAN NOT NULL DEFAULT false;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_id VARCHAR(50);
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_lead_name VARCHAR(100) DEFAULT 'N/A';
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS role_updated_at TIMESTAMPTZ;
+
         CREATE INDEX IF NOT EXISTS idx_designations_dept ON designations(department_id);
         CREATE INDEX IF NOT EXISTS idx_designations_grade ON designations(grade_id);
+        CREATE INDEX IF NOT EXISTS idx_designations_is_tl ON designations(is_tl_role);
         CREATE INDEX IF NOT EXISTS idx_employees_dept_id ON employees(department_id);
         CREATE INDEX IF NOT EXISTS idx_employees_desig_id ON employees(designation_id);
         CREATE INDEX IF NOT EXISTS idx_employees_grade_id ON employees(grade_id);
+        CREATE INDEX IF NOT EXISTS idx_employees_tl_id ON employees(team_lead_id);
         CREATE INDEX IF NOT EXISTS idx_users_dept_id ON users(department_id);
         CREATE INDEX IF NOT EXISTS idx_users_desig_id ON users(designation_id);
         CREATE INDEX IF NOT EXISTS idx_users_grade_id ON users(grade_id);
+        CREATE INDEX IF NOT EXISTS idx_users_tl_id ON users(team_lead_id);
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS group_name VARCHAR(100) DEFAULT 'TATA Company';
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS company_name VARCHAR(100) DEFAULT 'TATA Steel';
         ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_location VARCHAR(100) DEFAULT 'Kolkata';
+
+        UPDATE departments SET dept_code = 'IT', dept_name = 'IT Department' WHERE id = 1 OR dept_code = 'ENG' OR dept_name = 'Engineering / Tech';
+        UPDATE users SET dept = 'IT Department' WHERE department_id = 1 OR dept = 'Engineering / Tech';
+        UPDATE employees SET dept = 'IT Department' WHERE department_id = 1 OR dept = 'Engineering / Tech';
+        DELETE FROM designations WHERE title = 'ENG Tech Lead' OR code = 'D1-ENGTECHL';
+        UPDATE designations SET title = 'Team Lead - IT', code = 'IT-TL', job_family = 'IT' WHERE code = 'ENG-TL' OR id = 5;
 
         CREATE TABLE IF NOT EXISTS admin_tasks (
           id SERIAL PRIMARY KEY,
@@ -1560,6 +1581,34 @@ const connectDB = async () => {
         CREATE INDEX IF NOT EXISTS idx_att_reg_date ON attendance_regularizations (attendance_date);
         CREATE INDEX IF NOT EXISTS idx_att_reg_status ON attendance_regularizations (status);
 
+        -- Work From Home (WFH) Requests Table
+        CREATE TABLE IF NOT EXISTS work_from_homes (
+          id SERIAL PRIMARY KEY,
+          request_no VARCHAR(50) NOT NULL UNIQUE,
+          employee_id VARCHAR(50) NOT NULL,
+          employee_name VARCHAR(100) NOT NULL,
+          department VARCHAR(100) NOT NULL,
+          start_date DATE NOT NULL,
+          end_date DATE NOT NULL,
+          day_type VARCHAR(50) NOT NULL DEFAULT 'Full Day',
+          total_days NUMERIC(4, 1) NOT NULL DEFAULT 1.0,
+          reason TEXT NOT NULL,
+          work_plan TEXT,
+          emergency_contact VARCHAR(50),
+          status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+          current_level INTEGER DEFAULT 1,
+          approver_id VARCHAR(50),
+          approver_name VARCHAR(100),
+          approval_remarks TEXT,
+          approved_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wfh_emp_id ON work_from_homes (employee_id);
+        CREATE INDEX IF NOT EXISTS idx_wfh_dates ON work_from_homes (start_date, end_date);
+        CREATE INDEX IF NOT EXISTS idx_wfh_status ON work_from_homes (status);
+
         -- Candidate Pre-Joining Portal Table
         CREATE TABLE IF NOT EXISTS candidate_pre_joinings (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1610,6 +1659,7 @@ const connectDB = async () => {
     try {
       await AttendanceRegularization.sync();
       await CandidatePreJoining.sync();
+      await WorkFromHome.sync();
     } catch (autoSyncErr) {
       console.warn("Model direct sync note:", autoSyncErr.message);
     }
@@ -2016,7 +2066,7 @@ const connectDB = async () => {
       const deptCount = await Department.count();
       if (deptCount === 0) {
         await Department.bulkCreate([
-          { dept_code: "ENG", dept_name: "Engineering / Tech", description: "Software development, QA, DevOps, and Technology infrastructure" },
+          { dept_code: "IT", dept_name: "IT Department", description: "Information Technology, Systems, DevOps, Cloud Infrastructure, and Technical Support" },
           { dept_code: "SALES", dept_name: "Sales & Marketing", description: "Business development, enterprise sales, marketing campaigns, client relations" },
           { dept_code: "FIN", dept_name: "Accounts & Finance", description: "Financial management, taxation, accounting, payroll, and billing" },
           { dept_code: "HR", dept_name: "Human Resources (HR)", description: "Talent acquisition, employee welfare, policies, and people operations" },
@@ -2043,125 +2093,137 @@ const connectDB = async () => {
 
         const designationsToSeed = [
           // 1. Human Resources (HR)
-          { title: "HR Intern", code: "HR-INT", department_id: deptMap["HR"], grade_id: gradeMap["L1"], job_family: "HR", is_hod_role: false },
-          { title: "HR Executive", code: "HR-EXE", department_id: deptMap["HR"], grade_id: gradeMap["L2"], job_family: "HR", is_hod_role: false },
-          { title: "Sr. HR Executive", code: "HR-SEXE", department_id: deptMap["HR"], grade_id: gradeMap["L3"], job_family: "HR", is_hod_role: false },
-          { title: "Asst. HR Manager", code: "HR-AHM", department_id: deptMap["HR"], grade_id: gradeMap["L4"], job_family: "HR", is_hod_role: false },
-          { title: "Deputy HR Manager", code: "HR-DHM", department_id: deptMap["HR"], grade_id: gradeMap["L5"], job_family: "HR", is_hod_role: false },
-          { title: "HR Manager", code: "HR-MGR", department_id: deptMap["HR"], grade_id: gradeMap["L6"], job_family: "HR", is_hod_role: true },
-          { title: "Sr. HR Manager", code: "HR-SMGR", department_id: deptMap["HR"], grade_id: gradeMap["L7"], job_family: "HR", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - HR)", code: "HR-AGM", department_id: deptMap["HR"], grade_id: gradeMap["L8"], job_family: "HR", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - HR)", code: "HR-DGM", department_id: deptMap["HR"], grade_id: gradeMap["L9"], job_family: "HR", is_hod_role: true },
-          { title: "General Manager - HR", code: "HR-GM", department_id: deptMap["HR"], grade_id: gradeMap["L10"], job_family: "HR", is_hod_role: true },
-          { title: "CHRO / VP HR", code: "HR-CHRO", department_id: deptMap["HR"], grade_id: gradeMap["L11"], job_family: "HR", is_hod_role: true },
+          { title: "HR Intern", code: "HR-INT", department_id: deptMap["HR"], grade_id: gradeMap["L1"], job_family: "HR", is_hod_role: false, is_tl_role: false },
+          { title: "HR Executive", code: "HR-EXE", department_id: deptMap["HR"], grade_id: gradeMap["L2"], job_family: "HR", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. HR Executive", code: "HR-SEXE", department_id: deptMap["HR"], grade_id: gradeMap["L3"], job_family: "HR", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Human Resources", code: "HR-TL", department_id: deptMap["HR"], grade_id: gradeMap["L4"], job_family: "HR", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. HR Manager", code: "HR-AHM", department_id: deptMap["HR"], grade_id: gradeMap["L4"], job_family: "HR", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy HR Manager", code: "HR-DHM", department_id: deptMap["HR"], grade_id: gradeMap["L5"], job_family: "HR", is_hod_role: false, is_tl_role: false },
+          { title: "HR Manager", code: "HR-MGR", department_id: deptMap["HR"], grade_id: gradeMap["L6"], job_family: "HR", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. HR Manager", code: "HR-SMGR", department_id: deptMap["HR"], grade_id: gradeMap["L7"], job_family: "HR", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - HR)", code: "HR-AGM", department_id: deptMap["HR"], grade_id: gradeMap["L8"], job_family: "HR", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - HR)", code: "HR-DGM", department_id: deptMap["HR"], grade_id: gradeMap["L9"], job_family: "HR", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - HR", code: "HR-GM", department_id: deptMap["HR"], grade_id: gradeMap["L10"], job_family: "HR", is_hod_role: true, is_tl_role: false },
+          { title: "CHRO / VP HR", code: "HR-CHRO", department_id: deptMap["HR"], grade_id: gradeMap["L11"], job_family: "HR", is_hod_role: true, is_tl_role: false },
 
-          // 2. Engineering / Tech
-          { title: "Graduate Engineer Trainee (GET)", code: "ENG-GET", department_id: deptMap["ENG"], grade_id: gradeMap["L1"], job_family: "Engineering", is_hod_role: false },
-          { title: "Software Engineer", code: "ENG-SE", department_id: deptMap["ENG"], grade_id: gradeMap["L2"], job_family: "Engineering", is_hod_role: false },
-          { title: "Sr. Software Engineer", code: "ENG-SSE", department_id: deptMap["ENG"], grade_id: gradeMap["L3"], job_family: "Engineering", is_hod_role: false },
-          { title: "Asst. Engineering Manager / Tech Lead", code: "ENG-TL", department_id: deptMap["ENG"], grade_id: gradeMap["L4"], job_family: "Engineering", is_hod_role: false },
-          { title: "Deputy Engineering Manager", code: "ENG-DEM", department_id: deptMap["ENG"], grade_id: gradeMap["L5"], job_family: "Engineering", is_hod_role: false },
-          { title: "Engineering Manager", code: "ENG-MGR", department_id: deptMap["ENG"], grade_id: gradeMap["L6"], job_family: "Engineering", is_hod_role: true },
-          { title: "Sr. Engineering Manager", code: "ENG-SMGR", department_id: deptMap["ENG"], grade_id: gradeMap["L7"], job_family: "Engineering", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Technology)", code: "ENG-AGM", department_id: deptMap["ENG"], grade_id: gradeMap["L8"], job_family: "Engineering", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Engineering)", code: "ENG-DGM", department_id: deptMap["ENG"], grade_id: gradeMap["L9"], job_family: "Engineering", is_hod_role: true },
-          { title: "General Manager - Technology", code: "ENG-GM", department_id: deptMap["ENG"], grade_id: gradeMap["L10"], job_family: "Engineering", is_hod_role: true },
-          { title: "CTO / VP Engineering", code: "ENG-CTO", department_id: deptMap["ENG"], grade_id: gradeMap["L11"], job_family: "Engineering", is_hod_role: true },
+          // 2. IT Department
+          { title: "Graduate Engineer Trainee (GET)", code: "ENG-GET", department_id: deptMap["IT"] || deptMap["ENG"], grade_id: gradeMap["L1"], job_family: "IT", is_hod_role: false, is_tl_role: false },
+          { title: "Software Engineer", code: "ENG-SE", department_id: deptMap["IT"] || deptMap["ENG"], grade_id: gradeMap["L2"], job_family: "IT", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Software Engineer", code: "ENG-SSE", department_id: deptMap["IT"] || deptMap["ENG"], grade_id: gradeMap["L3"], job_family: "IT", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - IT", code: "IT-TL", department_id: deptMap["IT"] || deptMap["ENG"], grade_id: gradeMap["L4"], job_family: "IT", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Engineering Manager", code: "ENG-AEM", department_id: deptMap["ENG"], grade_id: gradeMap["L4"], job_family: "Engineering", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Engineering Manager", code: "ENG-DEM", department_id: deptMap["ENG"], grade_id: gradeMap["L5"], job_family: "Engineering", is_hod_role: false, is_tl_role: false },
+          { title: "Engineering Manager", code: "ENG-MGR", department_id: deptMap["ENG"], grade_id: gradeMap["L6"], job_family: "Engineering", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Engineering Manager", code: "ENG-SMGR", department_id: deptMap["ENG"], grade_id: gradeMap["L7"], job_family: "Engineering", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Technology)", code: "ENG-AGM", department_id: deptMap["ENG"], grade_id: gradeMap["L8"], job_family: "Engineering", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Engineering)", code: "ENG-DGM", department_id: deptMap["ENG"], grade_id: gradeMap["L9"], job_family: "Engineering", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Technology", code: "ENG-GM", department_id: deptMap["ENG"], grade_id: gradeMap["L10"], job_family: "Engineering", is_hod_role: true, is_tl_role: false },
+          { title: "CTO / VP Engineering", code: "ENG-CTO", department_id: deptMap["ENG"], grade_id: gradeMap["L11"], job_family: "Engineering", is_hod_role: true, is_tl_role: false },
 
           // 3. Sales & Marketing
-          { title: "Sales Trainee", code: "SLS-TRN", department_id: deptMap["SALES"], grade_id: gradeMap["L1"], job_family: "Sales", is_hod_role: false },
-          { title: "Business Development Executive (BDE) / BDA", code: "SLS-BDA", department_id: deptMap["SALES"], grade_id: gradeMap["L2"], job_family: "Sales", is_hod_role: false },
-          { title: "Sr. Business Development Executive (Sr. BDE)", code: "SLS-SBDA", department_id: deptMap["SALES"], grade_id: gradeMap["L3"], job_family: "Sales", is_hod_role: false },
-          { title: "Asst. Sales Manager", code: "SLS-ASM", department_id: deptMap["SALES"], grade_id: gradeMap["L4"], job_family: "Sales", is_hod_role: false },
-          { title: "Deputy Sales Manager", code: "SLS-DSM", department_id: deptMap["SALES"], grade_id: gradeMap["L5"], job_family: "Sales", is_hod_role: false },
-          { title: "Sales Manager", code: "SLS-MGR", department_id: deptMap["SALES"], grade_id: gradeMap["L6"], job_family: "Sales", is_hod_role: true },
-          { title: "Sr. Sales Manager", code: "SLS-SMGR", department_id: deptMap["SALES"], grade_id: gradeMap["L7"], job_family: "Sales", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Sales)", code: "SLS-AGM", department_id: deptMap["SALES"], grade_id: gradeMap["L8"], job_family: "Sales", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Sales & BD)", code: "SLS-DGM", department_id: deptMap["SALES"], grade_id: gradeMap["L9"], job_family: "Sales", is_hod_role: true },
-          { title: "General Manager - Sales & Marketing", code: "SLS-GM", department_id: deptMap["SALES"], grade_id: gradeMap["L10"], job_family: "Sales", is_hod_role: true },
-          { title: "VP of Sales & Growth / CCO", code: "SLS-VP", department_id: deptMap["SALES"], grade_id: gradeMap["L11"], job_family: "Sales", is_hod_role: true },
+          { title: "Sales Trainee", code: "SLS-TRN", department_id: deptMap["SALES"], grade_id: gradeMap["L1"], job_family: "Sales", is_hod_role: false, is_tl_role: false },
+          { title: "Business Development Executive (BDE) / BDA", code: "SLS-BDA", department_id: deptMap["SALES"], grade_id: gradeMap["L2"], job_family: "Sales", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Business Development Executive (Sr. BDE)", code: "SLS-SBDA", department_id: deptMap["SALES"], grade_id: gradeMap["L3"], job_family: "Sales", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Sales & Business Development", code: "SLS-TL", department_id: deptMap["SALES"], grade_id: gradeMap["L4"], job_family: "Sales", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Sales Manager", code: "SLS-ASM", department_id: deptMap["SALES"], grade_id: gradeMap["L4"], job_family: "Sales", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Sales Manager", code: "SLS-DSM", department_id: deptMap["SALES"], grade_id: gradeMap["L5"], job_family: "Sales", is_hod_role: false, is_tl_role: false },
+          { title: "Sales Manager", code: "SLS-MGR", department_id: deptMap["SALES"], grade_id: gradeMap["L6"], job_family: "Sales", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Sales Manager", code: "SLS-SMGR", department_id: deptMap["SALES"], grade_id: gradeMap["L7"], job_family: "Sales", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Sales)", code: "SLS-AGM", department_id: deptMap["SALES"], grade_id: gradeMap["L8"], job_family: "Sales", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Sales & BD)", code: "SLS-DGM", department_id: deptMap["SALES"], grade_id: gradeMap["L9"], job_family: "Sales", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Sales & Marketing", code: "SLS-GM", department_id: deptMap["SALES"], grade_id: gradeMap["L10"], job_family: "Sales", is_hod_role: true, is_tl_role: false },
+          { title: "VP of Sales & Growth / CCO", code: "SLS-VP", department_id: deptMap["SALES"], grade_id: gradeMap["L11"], job_family: "Sales", is_hod_role: true, is_tl_role: false },
 
           // 4. Accounts & Finance
-          { title: "Accounts Trainee", code: "FIN-TRN", department_id: deptMap["FIN"], grade_id: gradeMap["L1"], job_family: "Finance", is_hod_role: false },
-          { title: "Accounts Executive", code: "FIN-EXE", department_id: deptMap["FIN"], grade_id: gradeMap["L2"], job_family: "Finance", is_hod_role: false },
-          { title: "Sr. Accounts Executive / Sr. Accountant", code: "FIN-ACC", department_id: deptMap["FIN"], grade_id: gradeMap["L3"], job_family: "Finance", is_hod_role: false },
-          { title: "Asst. Finance Manager", code: "FIN-AFM", department_id: deptMap["FIN"], grade_id: gradeMap["L4"], job_family: "Finance", is_hod_role: false },
-          { title: "Deputy Finance Manager", code: "FIN-DFM", department_id: deptMap["FIN"], grade_id: gradeMap["L5"], job_family: "Finance", is_hod_role: false },
-          { title: "Finance Manager", code: "FIN-MGR", department_id: deptMap["FIN"], grade_id: gradeMap["L6"], job_family: "Finance", is_hod_role: true },
-          { title: "Sr. Finance Manager", code: "FIN-SMGR", department_id: deptMap["FIN"], grade_id: gradeMap["L7"], job_family: "Finance", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Finance)", code: "FIN-AGM", department_id: deptMap["FIN"], grade_id: gradeMap["L8"], job_family: "Finance", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Finance & Accounts)", code: "FIN-DGM", department_id: deptMap["FIN"], grade_id: gradeMap["L9"], job_family: "Finance", is_hod_role: true },
-          { title: "General Manager - Finance & Accounts", code: "FIN-GM", department_id: deptMap["FIN"], grade_id: gradeMap["L10"], job_family: "Finance", is_hod_role: true },
-          { title: "Chief Financial Officer (CFO) / VP Finance", code: "FIN-CFO", department_id: deptMap["FIN"], grade_id: gradeMap["L11"], job_family: "Finance", is_hod_role: true },
+          { title: "Accounts Trainee", code: "FIN-TRN", department_id: deptMap["FIN"], grade_id: gradeMap["L1"], job_family: "Finance", is_hod_role: false, is_tl_role: false },
+          { title: "Accounts Executive", code: "FIN-EXE", department_id: deptMap["FIN"], grade_id: gradeMap["L2"], job_family: "Finance", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Accounts Executive / Sr. Accountant", code: "FIN-ACC", department_id: deptMap["FIN"], grade_id: gradeMap["L3"], job_family: "Finance", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Accounts & Finance", code: "FIN-TL", department_id: deptMap["FIN"], grade_id: gradeMap["L4"], job_family: "Finance", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Finance Manager", code: "FIN-AFM", department_id: deptMap["FIN"], grade_id: gradeMap["L4"], job_family: "Finance", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Finance Manager", code: "FIN-DFM", department_id: deptMap["FIN"], grade_id: gradeMap["L5"], job_family: "Finance", is_hod_role: false, is_tl_role: false },
+          { title: "Finance Manager", code: "FIN-MGR", department_id: deptMap["FIN"], grade_id: gradeMap["L6"], job_family: "Finance", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Finance Manager", code: "FIN-SMGR", department_id: deptMap["FIN"], grade_id: gradeMap["L7"], job_family: "Finance", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Finance)", code: "FIN-AGM", department_id: deptMap["FIN"], grade_id: gradeMap["L8"], job_family: "Finance", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Finance & Accounts)", code: "FIN-DGM", department_id: deptMap["FIN"], grade_id: gradeMap["L9"], job_family: "Finance", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Finance & Accounts", code: "FIN-GM", department_id: deptMap["FIN"], grade_id: gradeMap["L10"], job_family: "Finance", is_hod_role: true, is_tl_role: false },
+          { title: "Chief Financial Officer (CFO) / VP Finance", code: "FIN-CFO", department_id: deptMap["FIN"], grade_id: gradeMap["L11"], job_family: "Finance", is_hod_role: true, is_tl_role: false },
 
           // 5. Operations / Plant
-          { title: "Operations Trainee / Plant Trainee", code: "OPS-TRN", department_id: deptMap["OPS"], grade_id: gradeMap["L1"], job_family: "Operations", is_hod_role: false },
-          { title: "Operations Executive / Junior Operator", code: "OPS-EXE", department_id: deptMap["OPS"], grade_id: gradeMap["L2"], job_family: "Operations", is_hod_role: false },
-          { title: "Sr. Operations Executive / Floor Supervisor", code: "OPS-SUP", department_id: deptMap["OPS"], grade_id: gradeMap["L3"], job_family: "Operations", is_hod_role: false },
-          { title: "Asst. Operations Manager", code: "OPS-AOM", department_id: deptMap["OPS"], grade_id: gradeMap["L4"], job_family: "Operations", is_hod_role: false },
-          { title: "Deputy Operations Manager", code: "OPS-DOM", department_id: deptMap["OPS"], grade_id: gradeMap["L5"], job_family: "Operations", is_hod_role: false },
-          { title: "Operations Manager / Plant Manager", code: "OPS-MGR", department_id: deptMap["OPS"], grade_id: gradeMap["L6"], job_family: "Operations", is_hod_role: true },
-          { title: "Sr. Operations Manager", code: "OPS-SMGR", department_id: deptMap["OPS"], grade_id: gradeMap["L7"], job_family: "Operations", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Operations)", code: "OPS-AGM", department_id: deptMap["OPS"], grade_id: gradeMap["L8"], job_family: "Operations", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Operations)", code: "OPS-DGM", department_id: deptMap["OPS"], grade_id: gradeMap["L9"], job_family: "Operations", is_hod_role: true },
-          { title: "General Manager - Plant & Operations", code: "OPS-GM", department_id: deptMap["OPS"], grade_id: gradeMap["L10"], job_family: "Operations", is_hod_role: true },
-          { title: "Chief Operating Officer (COO) / VP Operations", code: "OPS-COO", department_id: deptMap["OPS"], grade_id: gradeMap["L11"], job_family: "Operations", is_hod_role: true },
+          { title: "Operations Trainee / Plant Trainee", code: "OPS-TRN", department_id: deptMap["OPS"], grade_id: gradeMap["L1"], job_family: "Operations", is_hod_role: false, is_tl_role: false },
+          { title: "Operations Executive / Junior Operator", code: "OPS-EXE", department_id: deptMap["OPS"], grade_id: gradeMap["L2"], job_family: "Operations", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Operations Executive / Floor Supervisor", code: "OPS-SUP", department_id: deptMap["OPS"], grade_id: gradeMap["L3"], job_family: "Operations", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Operations", code: "OPS-TL", department_id: deptMap["OPS"], grade_id: gradeMap["L4"], job_family: "Operations", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Operations Manager", code: "OPS-AOM", department_id: deptMap["OPS"], grade_id: gradeMap["L4"], job_family: "Operations", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Operations Manager", code: "OPS-DOM", department_id: deptMap["OPS"], grade_id: gradeMap["L5"], job_family: "Operations", is_hod_role: false, is_tl_role: false },
+          { title: "Operations Manager / Plant Manager", code: "OPS-MGR", department_id: deptMap["OPS"], grade_id: gradeMap["L6"], job_family: "Operations", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Operations Manager", code: "OPS-SMGR", department_id: deptMap["OPS"], grade_id: gradeMap["L7"], job_family: "Operations", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Operations)", code: "OPS-AGM", department_id: deptMap["OPS"], grade_id: gradeMap["L8"], job_family: "Operations", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Operations)", code: "OPS-DGM", department_id: deptMap["OPS"], grade_id: gradeMap["L9"], job_family: "Operations", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Plant & Operations", code: "OPS-GM", department_id: deptMap["OPS"], grade_id: gradeMap["L10"], job_family: "Operations", is_hod_role: true, is_tl_role: false },
+          { title: "Chief Operating Officer (COO) / VP Operations", code: "OPS-COO", department_id: deptMap["OPS"], grade_id: gradeMap["L11"], job_family: "Operations", is_hod_role: true, is_tl_role: false },
 
           // 6. Administration & Facilities
-          { title: "Admin & Facilities Trainee", code: "ADM-TRN", department_id: deptMap["ADMIN"], grade_id: gradeMap["L1"], job_family: "Admin", is_hod_role: false },
-          { title: "Admin Executive", code: "ADM-EXE", department_id: deptMap["ADMIN"], grade_id: gradeMap["L2"], job_family: "Admin", is_hod_role: false },
-          { title: "Sr. Admin Executive / Facilities Executive", code: "ADM-SEXE", department_id: deptMap["ADMIN"], grade_id: gradeMap["L3"], job_family: "Admin", is_hod_role: false },
-          { title: "Asst. Admin Manager", code: "ADM-AAM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L4"], job_family: "Admin", is_hod_role: false },
-          { title: "Deputy Facilities Manager", code: "ADM-DFM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L5"], job_family: "Admin", is_hod_role: false },
-          { title: "Facilities & Admin Manager", code: "ADM-MGR", department_id: deptMap["ADMIN"], grade_id: gradeMap["L6"], job_family: "Admin", is_hod_role: true },
-          { title: "Sr. Facilities & Admin Manager", code: "ADM-SMGR", department_id: deptMap["ADMIN"], grade_id: gradeMap["L7"], job_family: "Admin", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Facilities & Admin)", code: "ADM-AGM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L8"], job_family: "Admin", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Corporate Infrastructure)", code: "ADM-DGM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L9"], job_family: "Admin", is_hod_role: true },
-          { title: "General Manager - Administration & Facilities", code: "ADM-GM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L10"], job_family: "Admin", is_hod_role: true },
-          { title: "VP - Corporate Services & Real Estate", code: "ADM-VP", department_id: deptMap["ADMIN"], grade_id: gradeMap["L11"], job_family: "Admin", is_hod_role: true },
+          { title: "Admin & Facilities Trainee", code: "ADM-TRN", department_id: deptMap["ADMIN"], grade_id: gradeMap["L1"], job_family: "Admin", is_hod_role: false, is_tl_role: false },
+          { title: "Admin Executive", code: "ADM-EXE", department_id: deptMap["ADMIN"], grade_id: gradeMap["L2"], job_family: "Admin", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Admin Executive / Facilities Executive", code: "ADM-SEXE", department_id: deptMap["ADMIN"], grade_id: gradeMap["L3"], job_family: "Admin", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Administration & Facilities", code: "ADM-TL", department_id: deptMap["ADMIN"], grade_id: gradeMap["L4"], job_family: "Admin", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Admin Manager", code: "ADM-AAM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L4"], job_family: "Admin", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Facilities Manager", code: "ADM-DFM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L5"], job_family: "Admin", is_hod_role: false, is_tl_role: false },
+          { title: "Facilities & Admin Manager", code: "ADM-MGR", department_id: deptMap["ADMIN"], grade_id: gradeMap["L6"], job_family: "Admin", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Facilities & Admin Manager", code: "ADM-SMGR", department_id: deptMap["ADMIN"], grade_id: gradeMap["L7"], job_family: "Admin", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Facilities & Admin)", code: "ADM-AGM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L8"], job_family: "Admin", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Corporate Infrastructure)", code: "ADM-DGM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L9"], job_family: "Admin", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Administration & Facilities", code: "ADM-GM", department_id: deptMap["ADMIN"], grade_id: gradeMap["L10"], job_family: "Admin", is_hod_role: true, is_tl_role: false },
+          { title: "VP - Corporate Services & Real Estate", code: "ADM-VP", department_id: deptMap["ADMIN"], grade_id: gradeMap["L11"], job_family: "Admin", is_hod_role: true, is_tl_role: false },
 
           // 7. Customer Support
-          { title: "Customer Support Trainee", code: "CS-TRN", department_id: deptMap["CS"], grade_id: gradeMap["L1"], job_family: "Support", is_hod_role: false },
-          { title: "Customer Support Executive", code: "CS-EXE", department_id: deptMap["CS"], grade_id: gradeMap["L2"], job_family: "Support", is_hod_role: false },
-          { title: "Sr. Customer Support Executive", code: "CS-SEXE", department_id: deptMap["CS"], grade_id: gradeMap["L3"], job_family: "Support", is_hod_role: false },
-          { title: "Asst. Support Manager / Team Lead", code: "CS-ASM", department_id: deptMap["CS"], grade_id: gradeMap["L4"], job_family: "Support", is_hod_role: false },
-          { title: "Deputy Customer Support Manager", code: "CS-DSM", department_id: deptMap["CS"], grade_id: gradeMap["L5"], job_family: "Support", is_hod_role: false },
-          { title: "Customer Support Manager", code: "CS-MGR", department_id: deptMap["CS"], grade_id: gradeMap["L6"], job_family: "Support", is_hod_role: true },
-          { title: "Sr. Customer Support Manager", code: "CS-SMGR", department_id: deptMap["CS"], grade_id: gradeMap["L7"], job_family: "Support", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Customer Support)", code: "CS-AGM", department_id: deptMap["CS"], grade_id: gradeMap["L8"], job_family: "Support", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Customer Success)", code: "CS-DGM", department_id: deptMap["CS"], grade_id: gradeMap["L9"], job_family: "Support", is_hod_role: true },
-          { title: "General Manager - Customer Experience & Operations", code: "CS-GM", department_id: deptMap["CS"], grade_id: gradeMap["L10"], job_family: "Support", is_hod_role: true },
-          { title: "VP - Customer Success & Experience (CX)", code: "CS-VP", department_id: deptMap["CS"], grade_id: gradeMap["L11"], job_family: "Support", is_hod_role: true },
+          { title: "Customer Support Trainee", code: "CS-TRN", department_id: deptMap["CS"], grade_id: gradeMap["L1"], job_family: "Support", is_hod_role: false, is_tl_role: false },
+          { title: "Customer Support Executive", code: "CS-EXE", department_id: deptMap["CS"], grade_id: gradeMap["L2"], job_family: "Support", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Customer Support Executive", code: "CS-SEXE", department_id: deptMap["CS"], grade_id: gradeMap["L3"], job_family: "Support", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Customer Support", code: "CS-TL", department_id: deptMap["CS"], grade_id: gradeMap["L4"], job_family: "Support", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Support Manager", code: "CS-ASM", department_id: deptMap["CS"], grade_id: gradeMap["L4"], job_family: "Support", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Customer Support Manager", code: "CS-DSM", department_id: deptMap["CS"], grade_id: gradeMap["L5"], job_family: "Support", is_hod_role: false, is_tl_role: false },
+          { title: "Customer Support Manager", code: "CS-MGR", department_id: deptMap["CS"], grade_id: gradeMap["L6"], job_family: "Support", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Customer Support Manager", code: "CS-SMGR", department_id: deptMap["CS"], grade_id: gradeMap["L7"], job_family: "Support", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Customer Support)", code: "CS-AGM", department_id: deptMap["CS"], grade_id: gradeMap["L8"], job_family: "Support", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Customer Success)", code: "CS-DGM", department_id: deptMap["CS"], grade_id: gradeMap["L9"], job_family: "Support", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Customer Experience & Operations", code: "CS-GM", department_id: deptMap["CS"], grade_id: gradeMap["L10"], job_family: "Support", is_hod_role: true, is_tl_role: false },
+          { title: "VP - Customer Success & Experience (CX)", code: "CS-VP", department_id: deptMap["CS"], grade_id: gradeMap["L11"], job_family: "Support", is_hod_role: true, is_tl_role: false },
 
           // 8. Legal Cell
-          { title: "Legal Intern / Legal Trainee", code: "LEG-TRN", department_id: deptMap["LEGAL"], grade_id: gradeMap["L1"], job_family: "Legal", is_hod_role: false },
-          { title: "Legal Executive / Legal Associate", code: "LEG-EXE", department_id: deptMap["LEGAL"], grade_id: gradeMap["L2"], job_family: "Legal", is_hod_role: false },
-          { title: "Sr. Legal Executive / Sr. Legal Counsel", code: "LEG-SEXE", department_id: deptMap["LEGAL"], grade_id: gradeMap["L3"], job_family: "Legal", is_hod_role: false },
-          { title: "Asst. Legal Manager", code: "LEG-ALM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L4"], job_family: "Legal", is_hod_role: false },
-          { title: "Deputy Legal Manager", code: "LEG-DLM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L5"], job_family: "Legal", is_hod_role: false },
-          { title: "Legal Manager / Legal Advisor", code: "LEG-MGR", department_id: deptMap["LEGAL"], grade_id: gradeMap["L6"], job_family: "Legal", is_hod_role: true },
-          { title: "Sr. Legal Manager", code: "LEG-SMGR", department_id: deptMap["LEGAL"], grade_id: gradeMap["L7"], job_family: "Legal", is_hod_role: true },
-          { title: "Asst. General Manager (AGM - Legal & Regulatory)", code: "LEG-AGM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L8"], job_family: "Legal", is_hod_role: true },
-          { title: "Deputy General Manager (DGM - Legal & Compliance)", code: "LEG-DGM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L9"], job_family: "Legal", is_hod_role: true },
-          { title: "General Manager - Legal Affairs", code: "LEG-GM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L10"], job_family: "Legal", is_hod_role: true },
-          { title: "General Counsel / VP Legal Affairs", code: "LEG-GC", department_id: deptMap["LEGAL"], grade_id: gradeMap["L11"], job_family: "Legal", is_hod_role: true },
+          { title: "Legal Intern / Legal Trainee", code: "LEG-TRN", department_id: deptMap["LEGAL"], grade_id: gradeMap["L1"], job_family: "Legal", is_hod_role: false, is_tl_role: false },
+          { title: "Legal Executive / Legal Associate", code: "LEG-EXE", department_id: deptMap["LEGAL"], grade_id: gradeMap["L2"], job_family: "Legal", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Legal Executive / Sr. Legal Counsel", code: "LEG-SEXE", department_id: deptMap["LEGAL"], grade_id: gradeMap["L3"], job_family: "Legal", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead - Legal & Compliance", code: "LEG-TL", department_id: deptMap["LEGAL"], grade_id: gradeMap["L4"], job_family: "Legal", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Legal Manager", code: "LEG-ALM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L4"], job_family: "Legal", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Legal Manager", code: "LEG-DLM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L5"], job_family: "Legal", is_hod_role: false, is_tl_role: false },
+          { title: "Legal Manager / Legal Advisor", code: "LEG-MGR", department_id: deptMap["LEGAL"], grade_id: gradeMap["L6"], job_family: "Legal", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Legal Manager", code: "LEG-SMGR", department_id: deptMap["LEGAL"], grade_id: gradeMap["L7"], job_family: "Legal", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM - Legal & Regulatory)", code: "LEG-AGM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L8"], job_family: "Legal", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM - Legal & Compliance)", code: "LEG-DGM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L9"], job_family: "Legal", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager - Legal Affairs", code: "LEG-GM", department_id: deptMap["LEGAL"], grade_id: gradeMap["L10"], job_family: "Legal", is_hod_role: true, is_tl_role: false },
+          { title: "General Counsel / VP Legal Affairs", code: "LEG-GC", department_id: deptMap["LEGAL"], grade_id: gradeMap["L11"], job_family: "Legal", is_hod_role: true, is_tl_role: false },
 
-          // 9. Global Cross-Department Designations (department_id: null)
-          { title: "Intern", code: "GEN-INT", department_id: null, grade_id: gradeMap["L1"], job_family: "General", is_hod_role: false },
-          { title: "Executive", code: "GEN-EXE", department_id: null, grade_id: gradeMap["L2"], job_family: "General", is_hod_role: false },
-          { title: "Sr. Executive", code: "GEN-SEXE", department_id: null, grade_id: gradeMap["L3"], job_family: "General", is_hod_role: false },
-          { title: "Asst. Manager", code: "GEN-AM", department_id: null, grade_id: gradeMap["L4"], job_family: "Leadership", is_hod_role: false },
-          { title: "Deputy Manager", code: "GEN-DM", department_id: null, grade_id: gradeMap["L5"], job_family: "Leadership", is_hod_role: false },
-          { title: "Manager", code: "GEN-MGR", department_id: null, grade_id: gradeMap["L6"], job_family: "Leadership", is_hod_role: true },
-          { title: "Sr. Manager", code: "GEN-SMGR", department_id: null, grade_id: gradeMap["L7"], job_family: "Leadership", is_hod_role: true },
-          { title: "Asst. General Manager (AGM)", code: "GEN-AGM", department_id: null, grade_id: gradeMap["L8"], job_family: "Leadership", is_hod_role: true },
-          { title: "Deputy General Manager (DGM)", code: "GEN-DGM", department_id: null, grade_id: gradeMap["L9"], job_family: "Leadership", is_hod_role: true },
-          { title: "General Manager (GM)", code: "GEN-GM", department_id: null, grade_id: gradeMap["L10"], job_family: "Leadership", is_hod_role: true },
-          { title: "Vice President (VP)", code: "GEN-VP", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true },
-          { title: "Chief Executive Officer (CEO)", code: "GEN-CEO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true },
-          { title: "Chief Operating Officer (COO)", code: "GEN-COO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true },
-          { title: "Chief Technology Officer (CTO)", code: "GEN-CTO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true },
-          { title: "Chief Financial Officer (CFO)", code: "GEN-CFO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true },
+          // 9. Executive Office
+          { title: "Executive Team Lead", code: "EXEC-TL", department_id: deptMap["EXEC"] || null, grade_id: gradeMap["L4"], job_family: "Executive", is_hod_role: false, is_tl_role: true },
+
+          // 10. Global Cross-Department Designations (department_id: null)
+          { title: "Intern", code: "GEN-INT", department_id: null, grade_id: gradeMap["L1"], job_family: "General", is_hod_role: false, is_tl_role: false },
+          { title: "Executive", code: "GEN-EXE", department_id: null, grade_id: gradeMap["L2"], job_family: "General", is_hod_role: false, is_tl_role: false },
+          { title: "Sr. Executive", code: "GEN-SEXE", department_id: null, grade_id: gradeMap["L3"], job_family: "General", is_hod_role: false, is_tl_role: false },
+          { title: "Team Lead (TL)", code: "GEN-TL", department_id: null, grade_id: gradeMap["L4"], job_family: "Leadership", is_hod_role: false, is_tl_role: true },
+          { title: "Asst. Manager", code: "GEN-AM", department_id: null, grade_id: gradeMap["L4"], job_family: "Leadership", is_hod_role: false, is_tl_role: false },
+          { title: "Deputy Manager", code: "GEN-DM", department_id: null, grade_id: gradeMap["L5"], job_family: "Leadership", is_hod_role: false, is_tl_role: false },
+          { title: "Manager", code: "GEN-MGR", department_id: null, grade_id: gradeMap["L6"], job_family: "Leadership", is_hod_role: true, is_tl_role: false },
+          { title: "Sr. Manager", code: "GEN-SMGR", department_id: null, grade_id: gradeMap["L7"], job_family: "Leadership", is_hod_role: true, is_tl_role: false },
+          { title: "Asst. General Manager (AGM)", code: "GEN-AGM", department_id: null, grade_id: gradeMap["L8"], job_family: "Leadership", is_hod_role: true, is_tl_role: false },
+          { title: "Deputy General Manager (DGM)", code: "GEN-DGM", department_id: null, grade_id: gradeMap["L9"], job_family: "Leadership", is_hod_role: true, is_tl_role: false },
+          { title: "General Manager (GM)", code: "GEN-GM", department_id: null, grade_id: gradeMap["L10"], job_family: "Leadership", is_hod_role: true, is_tl_role: false },
+          { title: "Vice President (VP)", code: "GEN-VP", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true, is_tl_role: false },
+          { title: "Chief Executive Officer (CEO)", code: "GEN-CEO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true, is_tl_role: false },
+          { title: "Chief Operating Officer (COO)", code: "GEN-COO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true, is_tl_role: false },
+          { title: "Chief Technology Officer (CTO)", code: "GEN-CTO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true, is_tl_role: false },
+          { title: "Chief Financial Officer (CFO)", code: "GEN-CFO", department_id: null, grade_id: gradeMap["L11"], job_family: "Executive", is_hod_role: true, is_tl_role: false },
         ];
 
         await Designation.bulkCreate(designationsToSeed);
@@ -2525,4 +2587,5 @@ const connectDB = async () => {
     FeedbackSummary360,
     CandidatePreJoining,
     AttendanceRegularization,
+    WorkFromHome,
   };
