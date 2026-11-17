@@ -1,4 +1,4 @@
-const { Attendance, User, Employee, Schedule, Holiday, sequelize } = require("../config/db");
+const { Attendance, User, Employee, Schedule, Holiday, WorkFromHome, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 const { getISTParts, getISTDateStr, getISTTimeStr } = require("../utils/timezone");
 
@@ -416,7 +416,7 @@ const AttendanceController = {
           scheduleWhere.employee_id = empWhere.employee_id;
         }
 
-        const [activeEmployees, activeUsers, schedules, holidays] = await Promise.all([
+        const [activeEmployees, activeUsers, schedules, holidays, approvedWfhs] = await Promise.all([
           Employee.findAll({
             where: empWhere,
             attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date", "work_location"],
@@ -437,6 +437,16 @@ const AttendanceController = {
               date: { [Op.between]: [startDateStr, endDateStr] }
             },
             attributes: ["id", "name", "date", "dept", "type", "is_working_day", "branch_location"],
+            raw: true,
+          }),
+          WorkFromHome.findAll({
+            where: {
+              status: "Approved",
+              [Op.and]: [
+                { start_date: { [Op.lte]: endDateStr } },
+                { end_date: { [Op.gte]: startDateStr } },
+              ],
+            },
             raw: true,
           }),
         ]);
@@ -484,6 +494,23 @@ const AttendanceController = {
           holidayMap[h.date] = h; if (!holidaysByDate[h.date]) holidaysByDate[h.date] = []; holidaysByDate[h.date].push(h);
         });
 
+        // Build quick lookup map for Approved WFH days
+        const wfhMap = new Map();
+        (approvedWfhs || []).forEach(w => {
+          const empCode = (w.employee_id || "").toLowerCase().trim();
+          const sD = new Date(w.start_date + "T12:00:00+05:30");
+          const eD = new Date(w.end_date + "T12:00:00+05:30");
+          const cur = new Date(sD);
+          while (cur <= eD) {
+            const y = cur.getFullYear();
+            const m = String(cur.getMonth() + 1).padStart(2, "0");
+            const d = String(cur.getDate()).padStart(2, "0");
+            const dStr = `${y}-${m}-${d}`;
+            wfhMap.set(`${empCode}_${dStr}`, w);
+            cur.setDate(cur.getDate() + 1);
+          }
+        });
+
         // Enrich existing punched records
         enrichedRecords = records.map(r => {
           const plain = { ...r };
@@ -491,14 +518,21 @@ const AttendanceController = {
           const sKey = `${eKey}_${plain.date}`;
           const matchedSchedule = scheduleMap[sKey];
           const matchedProfile = employeeCatalog.get(eKey);
+          const matchedWfh = wfhMap.get(sKey);
 
-          plain.shift_name = matchedSchedule?.shift_name || "General Shift";
+          plain.shift_name = matchedSchedule?.shift_name || (matchedWfh ? "WFH / Remote" : "General Shift");
           plain.shift_start = matchedSchedule?.start_time || "10:00";
-          plain.shift_end = matchedSchedule?.end_time || "19:00";
+          plain.shift_end = matchedSchedule?.end_time || (matchedWfh && (matchedWfh.day_type === "First Half" || matchedWfh.day_type === "Second Half") ? "14:00" : "19:00");
           plain.designation = matchedProfile?.designation || plain.designation || "Staff";
           plain.profile_photo = matchedProfile?.profile_photo || plain.profile_photo || null;
           if (matchedProfile?.dept && (!plain.dept || plain.dept === "General")) {
             plain.dept = matchedProfile.dept;
+          }
+          if (matchedWfh) {
+            plain.status = "WFH";
+            if (!plain.notes || plain.notes === "—") {
+              plain.notes = `Approved Work From Home (${matchedWfh.request_no}) - ${matchedWfh.reason}`;
+            }
           }
           plain.notes = plain.notes !== undefined ? plain.notes : (r.notes || null);
 
@@ -568,6 +602,7 @@ const AttendanceController = {
               }
 
               const matchedSchedule = scheduleMap[mapKey];
+              const matchedWfh = wfhMap.get(mapKey);
               const dObj = new Date(dStr + "T12:00:00+05:30");
               const dayName = dayNames[dObj.getDay()];
               const empWeeklyOff = (emp.weekly_off || "Sunday").toLowerCase().trim();
@@ -579,7 +614,14 @@ const AttendanceController = {
               let shiftEnd = "19:00";
               let notes = isFuture ? "Upcoming Scheduled Shift" : "No check-in recorded (Absent)";
 
-              if (matchedSchedule) {
+              if (matchedWfh) {
+                const isHalf = matchedWfh.day_type === "First Half" || matchedWfh.day_type === "Second Half";
+                status = "WFH";
+                shiftName = "WFH / Remote";
+                shiftStart = "10:00";
+                shiftEnd = isHalf ? "14:00" : "19:00";
+                notes = `Approved Work From Home (${matchedWfh.request_no}) - ${matchedWfh.reason}`;
+              } else if (matchedSchedule) {
                 shiftName = matchedSchedule.shift_name || "General Shift";
                 shiftStart = matchedSchedule.start_time || "10:00";
                 shiftEnd = matchedSchedule.end_time || "19:00";
@@ -646,9 +688,9 @@ const AttendanceController = {
                 designation: emp.designation,
                 profile_photo: emp.profile_photo,
                 date: dStr,
-                check_in: null,
-                check_out: null,
-                work_hours: 0,
+                check_in: matchedWfh ? "10:00" : null,
+                check_out: matchedWfh ? (matchedWfh.day_type === "First Half" || matchedWfh.day_type === "Second Half" ? "14:00" : "19:00") : null,
+                work_hours: matchedWfh ? (matchedWfh.day_type === "First Half" || matchedWfh.day_type === "Second Half" ? 4.00 : 8.00) : 0,
                 late_count: 0,
                 status,
                 shift_name: shiftName,

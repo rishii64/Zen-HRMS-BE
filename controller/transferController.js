@@ -1,4 +1,4 @@
-const { Transfer, Employee, Department, Designation, Notification, sequelize } = require("../config/db");
+const { Transfer, Employee, User, Department, Designation, Notification, sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 
 const TransferController = {
@@ -293,9 +293,52 @@ const TransferController = {
             empUpdate.current_salary = transfer.revised_salary;
           }
 
+          if (transfer.target_designation) {
+            empUpdate.role_updated_at = new Date();
+          }
           await emp.update(empUpdate);
           updatePayload.sync_employee_record = true;
           employeeUpdated = true;
+
+          if (transfer.target_designation) {
+            try {
+              await User.update(
+                {
+                  designation: transfer.target_designation,
+                  role_updated_at: new Date(),
+                },
+                {
+                  where: sequelize.where(
+                    sequelize.fn("LOWER", sequelize.col("employee_id")),
+                    emp.employee_id.toLowerCase().trim()
+                  ),
+                }
+              );
+
+              const { sendRealtimeNotification, getIO } = require("../socket");
+              const io = getIO();
+              if (io) {
+                io.to(`user:${emp.employee_id.toUpperCase().trim()}`).emit("role_updated", {
+                  employee_id: emp.employee_id,
+                  title: "Role & Designation Updated",
+                  message: "Your role has been updated, please re-login to enjoy seamless workflow",
+                  requires_relogin: true,
+                  new_designation: transfer.target_designation,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+              await sendRealtimeNotification({
+                recipient_id: emp.employee_id,
+                title: "Role & Permissions Updated ⚡",
+                message: "Your role has been updated, please re-login to enjoy seamless workflow",
+                type: "role_updated",
+                category: "General",
+                priority: "urgent",
+                source_module: "transfers",
+                created_by: user.name || "CHRO",
+              });
+            } catch (_) {}
+          }
         }
       }
 

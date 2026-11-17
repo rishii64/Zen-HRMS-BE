@@ -88,6 +88,15 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(50),
         allowNull: true,
       },
+      team_lead_id: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      team_lead_name: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        defaultValue: "N/A",
+      },
       hod_id: {
         type: DataTypes.STRING(50),
         allowNull: true,
@@ -96,6 +105,10 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(100),
         allowNull: true,
         defaultValue: "N/A",
+      },
+      role_updated_at: {
+        type: DataTypes.DATE,
+        allowNull: true,
       },
 
       group_name: {
@@ -197,6 +210,11 @@ module.exports = (sequelize) => {
 
       education: {
         type: DataTypes.TEXT,
+        allowNull: true,
+      },
+
+      highest_qualification: {
+        type: DataTypes.STRING(150),
         allowNull: true,
       },
 

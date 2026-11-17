@@ -33,6 +33,7 @@ const Feedback360Controller = require("../controller/feedback360Controller");
 const CustomReportController = require("../controller/customReportController");
 const PreJoiningController = require("../controller/preJoiningController");
 const AttendanceRegularizationController = require("../controller/attendanceRegularizationController");
+const WfhController = require("../controller/wfhController");
 const authenticate = require("../middleware/Authorization");
 const { authorizeRoles, authenticateAllowExpired } = require("../middleware/Authorization");
 const upload = require("../utils/multer");
@@ -122,6 +123,13 @@ router.get("/attendance/regularization/all", authenticate, authorizeRoles("hr", 
 router.patch("/attendance/regularization/:id/approve", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager", "accounts", "payroll"), AttendanceRegularizationController.approveRegularization);
 router.patch("/attendance/regularization/:id/reject", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager", "accounts", "payroll"), AttendanceRegularizationController.rejectRegularization);
 router.post("/attendance/regularization/:id/reverse", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager"), AttendanceRegularizationController.reverseAttendance);
+
+// Work From Home (WFH) routes
+router.post("/wfh/apply", authenticate, WfhController.applyWFH);
+router.get("/wfh/my-requests", authenticate, WfhController.getMyWFHRequests);
+router.get("/wfh/all", authenticate, authorizeRoles("hr", "admin", "hod", "manager", "teamlead", "ceo", "coo", "hrmanager", "accounts", "payroll"), WfhController.getAllWFHRequests);
+router.get("/wfh/:id", authenticate, WfhController.getWFHById);
+router.delete("/wfh/:id/cancel", authenticate, WfhController.cancelWFH);
 
 // Biometric Hardware & Real-Time Sync routes
 router.post("/attendance/biometric/punch", optionalDeviceAuth, BiometricController.recordPunch);
@@ -534,6 +542,7 @@ router.get("/organization/structure", OrganizationController.getOrganizationStru
 router.get("/organization/tree", OrganizationController.getOrgTree);
 router.get("/organization/department-hierarchy", OrganizationController.getDepartmentHierarchy);
 router.put("/organization/reporting-manager", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.reassignReportingManager);
+router.put("/organization/team-lead", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.reassignTeamLead);
 router.put("/organization/hod", authenticate, authorizeRoles("hr", "admin", "management", "ceo", "coo", "hrmanager"), OrganizationController.reassignHod);
 router.get("/organization/analytics", OrganizationController.getVisualAnalytics);
 

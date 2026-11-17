@@ -1,6 +1,7 @@
 const {
   Promotion,
   Employee,
+  User,
   JobGrade,
   Designation,
   Department,
@@ -508,9 +509,50 @@ const PromotionController = {
             empUpdate.salary_structure = JSON.stringify(updatedStructure);
           }
 
+          empUpdate.role_updated_at = new Date();
           await emp.update(empUpdate);
           updatePayload.sync_employee_record = true;
           employeeUpdated = true;
+
+          try {
+            await User.update(
+              {
+                designation: promotion.target_designation,
+                ...(empUpdate.grade_id ? { grade_id: empUpdate.grade_id } : {}),
+                role_updated_at: new Date(),
+              },
+              {
+                where: sequelize.where(
+                  sequelize.fn("LOWER", sequelize.col("employee_id")),
+                  emp.employee_id.toLowerCase().trim()
+                ),
+              }
+            );
+
+            const { sendRealtimeNotification, getIO } = require("../socket");
+            const io = getIO();
+            if (io) {
+              io.to(`user:${emp.employee_id.toUpperCase().trim()}`).emit("role_updated", {
+                employee_id: emp.employee_id,
+                title: "Role & Promotion Updated",
+                message: "Your role has been updated, please re-login to enjoy seamless workflow",
+                requires_relogin: true,
+                new_designation: promotion.target_designation,
+                new_grade: promotion.target_grade_code,
+                timestamp: new Date().toISOString(),
+              });
+            }
+            await sendRealtimeNotification({
+              recipient_id: emp.employee_id,
+              title: "Role & Permissions Updated ⚡",
+              message: "Your role has been updated, please re-login to enjoy seamless workflow",
+              type: "role_updated",
+              category: "General",
+              priority: "urgent",
+              source_module: "promotion",
+              created_by: user.name || "CHRO",
+            });
+          } catch (_) {}
         }
       }
 
