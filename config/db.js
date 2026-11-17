@@ -1659,6 +1659,7 @@ const connectDB = async () => {
     try {
       await AttendanceRegularization.sync();
       await CandidatePreJoining.sync();
+      await WorkFromHome.sync();
     } catch (autoSyncErr) {
       console.warn("Model direct sync note:", autoSyncErr.message);
     }

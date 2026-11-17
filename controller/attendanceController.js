@@ -353,8 +353,13 @@ const AttendanceController = {
         date: dateCondition,
       };
 
-      // Enforce visibility rules
-      let empWhere = { status: { [Op.ne]: "Terminated" } };
+      // Enforce visibility rules (null-safe check so employees with unpopulated/NULL status are included)
+      let empWhere = {
+        [Op.or]: [
+          { status: { [Op.ne]: "Terminated" } },
+          { status: null },
+        ]
+      };
 
       const userDesig = (req.user?.designation || "").toLowerCase().trim();
       const isLeadershipDesig =
@@ -416,39 +421,121 @@ const AttendanceController = {
           scheduleWhere.employee_id = empWhere.employee_id;
         }
 
+        // Resilient individual fetchers: ensures that missing columns (e.g. work_location, branch_location)
+        // or unmigrated tables (e.g. work_from_homes on hosted DB) NEVER crash employee synthesis.
+        const safeFetchEmployees = async () => {
+          try {
+            return await Employee.findAll({
+              where: empWhere,
+              attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date", "work_location"],
+              raw: true,
+            });
+          } catch (e1) {
+            try {
+              return await Employee.findAll({
+                where: empWhere,
+                attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date"],
+                raw: true,
+              });
+            } catch (e2) {
+              try {
+                return await Employee.findAll({ raw: true });
+              } catch (e3) {
+                console.warn("safeFetchEmployees error:", e3.message);
+                return [];
+              }
+            }
+          }
+        };
+
+        const safeFetchUsers = async () => {
+          try {
+            return await User.findAll({
+              where: empWhere,
+              attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off", "work_location"],
+              raw: true,
+            });
+          } catch (u1) {
+            try {
+              return await User.findAll({
+                where: empWhere,
+                attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off"],
+                raw: true,
+              });
+            } catch (u2) {
+              try {
+                return await User.findAll({ raw: true });
+              } catch (u3) {
+                console.warn("safeFetchUsers error:", u3.message);
+                return [];
+              }
+            }
+          }
+        };
+
+        const safeFetchSchedules = async () => {
+          try {
+            return await Schedule.findAll({
+              where: scheduleWhere,
+              attributes: ["id", "employee_id", "date", "shift_name", "start_time", "end_time", "notes"],
+              raw: true,
+            });
+          } catch (sErr) {
+            console.warn("safeFetchSchedules error:", sErr.message);
+            return [];
+          }
+        };
+
+        const safeFetchHolidays = async () => {
+          try {
+            return await Holiday.findAll({
+              where: {
+                date: { [Op.between]: [startDateStr, endDateStr] }
+              },
+              attributes: ["id", "name", "date", "dept", "type", "is_working_day", "branch_location"],
+              raw: true,
+            });
+          } catch (h1) {
+            try {
+              return await Holiday.findAll({
+                where: {
+                  date: { [Op.between]: [startDateStr, endDateStr] }
+                },
+                attributes: ["id", "name", "date", "dept", "type", "is_working_day"],
+                raw: true,
+              });
+            } catch (h2) {
+              console.warn("safeFetchHolidays error:", h2.message);
+              return [];
+            }
+          }
+        };
+
+        const safeFetchWfhs = async () => {
+          if (!WorkFromHome) return [];
+          try {
+            return await WorkFromHome.findAll({
+              where: {
+                status: "Approved",
+                [Op.and]: [
+                  { start_date: { [Op.lte]: endDateStr } },
+                  { end_date: { [Op.gte]: startDateStr } },
+                ],
+              },
+              raw: true,
+            });
+          } catch (wErr) {
+            console.warn("safeFetchWfhs error (table might not exist yet on remote db):", wErr.message);
+            return [];
+          }
+        };
+
         const [activeEmployees, activeUsers, schedules, holidays, approvedWfhs] = await Promise.all([
-          Employee.findAll({
-            where: empWhere,
-            attributes: ["id", "employee_id", "first_name", "last_name", "dept", "designation", "profile_photo", "weekly_off", "joining_date", "work_location"],
-            raw: true,
-          }),
-          User.findAll({
-            where: empWhere,
-            attributes: ["id", "employee_id", "name", "dept", "designation", "profile_photo", "weekly_off", "work_location"],
-            raw: true,
-          }),
-          Schedule.findAll({
-            where: scheduleWhere,
-            attributes: ["id", "employee_id", "date", "shift_name", "start_time", "end_time", "notes"],
-            raw: true,
-          }),
-          Holiday.findAll({
-            where: {
-              date: { [Op.between]: [startDateStr, endDateStr] }
-            },
-            attributes: ["id", "name", "date", "dept", "type", "is_working_day", "branch_location"],
-            raw: true,
-          }),
-          WorkFromHome.findAll({
-            where: {
-              status: "Approved",
-              [Op.and]: [
-                { start_date: { [Op.lte]: endDateStr } },
-                { end_date: { [Op.gte]: startDateStr } },
-              ],
-            },
-            raw: true,
-          }),
+          safeFetchEmployees(),
+          safeFetchUsers(),
+          safeFetchSchedules(),
+          safeFetchHolidays(),
+          safeFetchWfhs(),
         ]);
 
         const employeeCatalog = new Map();
