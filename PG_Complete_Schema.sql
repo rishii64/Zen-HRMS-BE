@@ -1560,4 +1560,33 @@ CREATE INDEX IF NOT EXISTS idx_loan_type ON loans_advances (type);
 CREATE INDEX IF NOT EXISTS idx_repayment_loan_id ON loan_repayment_logs (loan_id);
 CREATE INDEX IF NOT EXISTS idx_repayment_emp ON loan_repayment_logs (employee_id);
 
+-- Work From Home (WFH) Requests Table
+CREATE TABLE IF NOT EXISTS work_from_homes (
+  id SERIAL PRIMARY KEY,
+  request_no VARCHAR(50) NOT NULL UNIQUE,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(100) NOT NULL,
+  department VARCHAR(100) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  day_type VARCHAR(50) NOT NULL DEFAULT 'Full Day',
+  total_days NUMERIC(4, 1) NOT NULL DEFAULT 1.0,
+  reason TEXT NOT NULL,
+  work_plan TEXT,
+  emergency_contact VARCHAR(50),
+  status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+  current_level INTEGER DEFAULT 1,
+  approver_id VARCHAR(50),
+  approver_name VARCHAR(100),
+  approval_remarks TEXT,
+  approved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wfh_emp_id ON work_from_homes (employee_id);
+CREATE INDEX IF NOT EXISTS idx_wfh_dates ON work_from_homes (start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_wfh_status ON work_from_homes (status);
+
+
 

@@ -36,6 +36,11 @@ module.exports = (sequelize) => {
         allowNull: false,
         defaultValue: false,
       },
+      is_tl_role: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
       description: {
         type: DataTypes.TEXT,
         allowNull: true,

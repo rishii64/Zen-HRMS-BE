@@ -468,13 +468,17 @@ const PayrollController = {
       let presentDays = 0;
       let lateDays = 0;
       let absentDays = 0;
+      let wfhDays = 0;
       let overtimeHours = 0;
 
       if (attendanceRecords && attendanceRecords.length > 0) {
         attendanceRecords.forEach(rec => {
           const st = (rec.status || "").toLowerCase();
-          if (st.includes("present") || st.includes("half")) {
+          if (st.includes("present") || st.includes("half") || st.includes("wfh") || st.includes("work from home")) {
             presentDays += st.includes("half") ? 0.5 : 1;
+            if (st.includes("wfh") || st.includes("work from home")) {
+              wfhDays += st.includes("half") ? 0.5 : 1;
+            }
           } else if (st.includes("absent") || st.includes("unpaid")) {
             absentDays += 1;
           }
@@ -699,6 +703,7 @@ const PayrollController = {
             working_days: workingDays,
             week_offs: weekOffs,
             present_days: presentDays,
+            wfh_days: wfhDays,
             leave_days: leaveDays,
             holiday_days: holidayDays,
             absent_days: absentDays,
@@ -1772,11 +1777,15 @@ const PayrollController = {
         let presentDays = 0;
         let absentDays = 0;
         let lateDays = 0;
+        let wfhDays = 0;
         let overtimeHours = 0;
         userAtts.forEach(rec => {
           const st = (rec.status || "").toLowerCase();
-          if (st.includes("present") || st.includes("half")) {
+          if (st.includes("present") || st.includes("half") || st.includes("wfh") || st.includes("work from home")) {
             presentDays += st.includes("half") ? 0.5 : 1;
+            if (st.includes("wfh") || st.includes("work from home")) {
+              wfhDays += st.includes("half") ? 0.5 : 1;
+            }
           } else if (st.includes("absent") || st.includes("unpaid")) {
             absentDays += 1;
           }
@@ -1820,6 +1829,7 @@ const PayrollController = {
           total_days: attSummary?.total_days ?? daysInMonth,
           working_days: attSummary?.working_days ?? workingDays,
           present_days: attSummary?.present_days ?? presentDays,
+          wfh_days: attSummary?.wfh_days ?? wfhDays,
           leave_days: attSummary?.leave_days ?? leaveDays,
           absent_days: attSummary?.absent_days ?? absentDays,
           holiday_days: attSummary?.holiday_days ?? holidayDays,
